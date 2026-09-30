@@ -1,8 +1,8 @@
 {
   "candidate": "0.1.0-rc2",
   "date": "2026-09-30",
-  "hardware_validation": "pending",
-  "arch_makepkg_kernel_install_boot_validation": "pending",
+  "hardware_validation": "RX 7900 XTX packaged feature off/on gameplay observed; native GPU suite and long-term stability pending",
+  "arch_makepkg_kernel_install_boot_validation": "Installed package versions and boot observed in captures; full build and boot integration logs not supplied",
   "source_sha256": {
     "kernel/0001-amdgpu-explicit-unmap-e01.patch": "1d0cf7ee6f03e01899ab1bc6364749cf99923e3264ab81e1a216533061584972",
     "kernel/0002-amdgpu-direct-replace-e03.patch": "1e6e13b5f106dc177a7486d2072e665d02219a5cb77b4c1001c85444e7dc7d01",
@@ -76,7 +76,7 @@
   },
   "notes": [
     "Local compilation uses Ubuntu and a private build dependency prefix. It is not an Arch package installation.",
-    "E28 game evidence applies to the original setup. New per-VM activation and package boot need hardware testing.",
+    "Historical E28 evidence applies to the original setup. New per-VM activation, packaged kernel boot and game operation are now observed in six RX 7900 XTX captures; see hardware_gameplay below.",
     "The old long-probe test had 0/16 pending observations in accepted E28; E22 tiny probes establish overlap.",
     "rc2 replaces GPU ID checks with capability/VM checks. Only amdgpu_vm.c and RADV init/docs differ from the previously compiled driver/kernel; unaffected compiled objects are reused."
   ],
@@ -119,5 +119,23 @@
       "sdma_v7_0.c": 10,
       "sdma_v7_1.c": 10
     }
+  },
+  "hardware_gameplay": {
+    "date": "2026-09-30",
+    "gpu": "AMD Radeon RX 7900 XTX",
+    "source": "../benchmarks/results/2026-09-30-rx7900xtx/provenance.json",
+    "kernel": "7.2.8-2-cachyos-sparse-vm",
+    "radv_package": "vulkan-radeon-sparse-vm 3:26.2.3-2",
+    "runs_per_mode": 3,
+    "nominal_seconds_per_run": 40,
+    "all_captures_complete": true,
+    "installed_and_mapped_radv_hash_match": true,
+    "activation_only_in_on_runs": true,
+    "same_recorded_binary_hashes": true,
+    "same_saved_gameplay_settings": true,
+    "stability": "Unknown beyond completed measurement windows. Five additional crash-report-client configuration entries appeared between captures after both modes; reports and kernel fault logs not supplied.",
+    "packaged_native_gpu_tests": "Not supplied",
+    "other_gpu_models": "Not tested",
+    "full_arch_build_logs": "Not supplied"
   }
 }

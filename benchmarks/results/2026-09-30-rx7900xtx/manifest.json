@@ -1,0 +1,39 @@
+{
+  "title": "FFVII Rebirth: sparse_vm off versus on",
+  "subtitle": "RX 7900 XTX \u00b7 Ryzen 9 9950X3D \u00b7 Tower camera rotation \u00b7 three 40-second captures per mode",
+  "duration_s": 40,
+  "frame_time_layout": "grouped",
+  "notes": "Same packaged kernel/RADV with only sparse_vm toggled in the recorded graphics environment. Fresh launches; at least 30 s warm-up; saved gameplay configs match; manual rotations are not camera-aligned. Reported settings: 3840x2160, 100% scaling, high textures, t.MaxFPS 0. Saved window dimensions: 3840x2134. No live render extent or panel scanout measurement. See README.md and provenance.json for evidence and limits.",
+  "runs": [
+    {
+      "group": "Feature off",
+      "label": "Off-1",
+      "csv": "off-1.csv"
+    },
+    {
+      "group": "Feature on",
+      "label": "On-1",
+      "csv": "on-1.csv"
+    },
+    {
+      "group": "Feature on",
+      "label": "On-2",
+      "csv": "on-2.csv"
+    },
+    {
+      "group": "Feature off",
+      "label": "Off-2",
+      "csv": "off-2.csv"
+    },
+    {
+      "group": "Feature off",
+      "label": "Off-3",
+      "csv": "off-3.csv"
+    },
+    {
+      "group": "Feature on",
+      "label": "On-3",
+      "csv": "on-3.csv"
+    }
+  ]
+}

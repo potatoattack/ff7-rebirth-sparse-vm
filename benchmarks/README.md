@@ -4,9 +4,10 @@ Compare **the same packaged kernel and RADV with `sparse_vm` off and on**.
 This isolates the opt-in feature; it is not a comparison between different
 distribution builds. Both modes keep your existing Proton and display backend.
 
-The public package's performance comparison is still pending. Earlier controls
-already contained some fixes, and settings changed over the investigation.
-They cannot be labelled an unpatched-versus-final benchmark. The
+The [RX 7900 XTX comparison](results/2026-09-30-rx7900xtx/README.md) contains
+three completed captures per mode, all frame data and reproducible graphs.
+Earlier investigation controls already contained some fixes, and settings
+changed over time; they cannot be labelled an unpatched-versus-final benchmark. The
 [historical example](examples/e07/README.md) demonstrates the plotting format
 with a clearly identified incremental comparison.
 
@@ -17,9 +18,8 @@ with a clearly identified incremental comparison.
 2. Use the save, viewpoint and graphics settings you intend to play with.
    Keep resolution, both scaling sliders, texture quality, frame limit,
    upscaler/frame generation, HDR/VRR, Proton, INI values and mods identical
-   throughout. For this comparison, keep your current 100%/100% scaling and
-   intended frame-limit setting, and record the actual setting. Leave texture
-   quality and the existing INI values unchanged.
+   throughout. Record the actual values and retain any existing INI overrides
+   in both modes.
 3. Take one settings screenshot and note the displayed cap/scaling settings.
    Saved INI values alone do not establish the live render resolution or cap.
 4. Use the same camera motion, preferably a controller stick held consistently,
@@ -83,10 +83,10 @@ launcher also records `launch-output.log` in its own directory. That full log
 is excluded from the upload archive. A failed recording retains diagnostics
 and requires a fresh launch before retrying.
 
-The logger uses the private-config/inotify trigger previously exercised during
-the investigation. This standalone packaged-driver wrapper has host checks but
-has not yet been exercised on the target machine. It deliberately fails if the
-installed kernel/driver, process, activation or complete log cannot be verified.
+The logger uses a private-config/inotify trigger. The standalone wrapper has
+host checks and completed all six captures in the linked RX 7900 XTX comparison.
+It deliberately fails if the installed kernel/driver, process, activation or
+complete log cannot be verified.
 
 ## Generate graphs
 
@@ -111,6 +111,9 @@ Include the other four captures in a completed comparison. Before publishing,
 check the captured driver/game/Proton hashes, settings, activation, failures and
 notes across runs. The plotter validates frame data and duration; it does not
 establish matched settings or a causal effect by itself.
+
+For equal numbers of off/on runs, add `"frame_time_layout": "grouped"` to
+place them in two columns. Capture numbers retain the acquisition order.
 
 ```sh
 python3 benchmarks/plot.py /path/to/manifest.json --output /path/to/graphs

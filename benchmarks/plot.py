@@ -98,22 +98,54 @@ def render(manifest_path, output):
     plt.rcParams.update({"font.family": "DejaVu Sans", "font.size": 11,
                          "axes.spines.top": False, "axes.spines.right": False,
                          "svg.hashsalt": "ff7-sparse-vm-benchmarks", "path.simplify": False})
-    figure, axes = plt.subplots(len(runs), 1, figsize=(12, 2.05 * len(runs) + 1.7),
-                                sharex=True, sharey=True, squeeze=False)
+    layout = manifest.get("frame_time_layout", "stacked")
+    if layout == "grouped":
+        columns = [[i for i, run in enumerate(runs) if run["group"] == group]
+                   for group in groups]
+        if len(columns[0]) != len(columns[1]):
+            raise ValueError("Grouped frame-time layout requires equal run counts")
+        figure, axes = plt.subplots(len(columns[0]), 2,
+                                    figsize=(13, 2.15 * len(columns[0]) + 1.8),
+                                    sharex=True, sharey=True, squeeze=False)
+        panels = [(axes[row, col], index) for col, column in enumerate(columns)
+                  for row, index in enumerate(column)]
+    elif layout == "stacked":
+        figure, axes = plt.subplots(len(runs), 1, figsize=(12, 2.05 * len(runs) + 1.7),
+                                    sharex=True, sharey=True, squeeze=False)
+        panels = list(zip(axes[:, 0], range(len(runs))))
+    else:
+        raise ValueError(f"Unknown frame-time layout: {layout}")
     ymax = max(max(frames) for _, frames, _ in datasets) * 1.10
     xmax = max(elapsed[-1] for _, _, elapsed in datasets)
-    for axis, (run, frames, elapsed), result in zip(axes[:, 0], datasets, results):
+    for axis, index in panels:
+        run, frames, elapsed = datasets[index]
+        result = results[index]
         axis.plot(elapsed, frames, color=colors[run["group"]], linewidth=0.65)
         axis.set_ylim(0, ymax)
         axis.set_xlim(0, xmax)
         axis.set_ylabel("Frame time (ms)")
         axis.grid(axis="y", alpha=0.2)
-        axis.set_title(f"{run['label']}  ·  P99 {result['p99_ms']:.2f} ms  ·  "
-                       f"maximum {result['max_ms']:.2f} ms", loc="left", fontsize=11)
-    axes[-1, 0].set_xlabel("Seconds from first logged frame (runs are not camera-aligned)")
+        suffix = f"  ·  capture {index + 1}" if layout == "grouped" else ""
+        maximum_label = "max" if layout == "grouped" else "maximum"
+        axis.set_title(f"{run['label']}{suffix}  ·  P99 {result['p99_ms']:.2f} ms  ·  "
+                       f"{maximum_label} {result['max_ms']:.2f} ms", loc="left",
+                       fontsize=10 if layout == "grouped" else 11)
+    if layout == "grouped":
+        for axis in axes[-1]:
+            axis.set_xlabel("Seconds from first logged frame")
+        for axis in axes[:, 1]:
+            axis.set_ylabel("")
+        footer = "All recorded frames; shared axes; no smoothing; rotations are not camera-aligned."
+    else:
+        axes[-1, 0].set_xlabel("Seconds from first logged frame (runs are not camera-aligned)")
+        footer = "All recorded frames; shared axes; lower frame times are better."
     figure.suptitle(manifest["title"], x=0.09, ha="left", fontsize=17, fontweight="bold")
-    figure.text(0.09, 0.025, manifest["subtitle"] + "\nAll recorded frames; shared axes; lower frame times are better.", fontsize=10)
-    figure.subplots_adjust(left=0.09, right=0.975, top=0.88, bottom=0.16, hspace=0.48)
+    figure.text(0.09, 0.025, manifest["subtitle"] + "\n" + footer, fontsize=10)
+    if layout == "grouped":
+        figure.subplots_adjust(left=0.09, right=0.975, top=0.89, bottom=0.17,
+                               hspace=0.48, wspace=0.10)
+    else:
+        figure.subplots_adjust(left=0.09, right=0.975, top=0.88, bottom=0.16, hspace=0.48)
     save(figure, output / "frame-times")
     plt.close(figure)
 
@@ -127,8 +159,9 @@ def render(manifest_path, output):
         upper = [max(run[key] for run in subset) - medians[i] for i, key in enumerate(keys)]
         axis.errorbar(positions, medians, yerr=[lower, upper], fmt="s", capsize=5,
                       color=colors[group], label=group, markersize=7)
-        for run in subset:
-            axis.scatter(positions, [run[key] for key in keys], color=colors[group],
+        for run_index, run in enumerate(subset):
+            offset = (run_index - (len(subset) - 1) / 2) * 0.035
+            axis.scatter([x + offset for x in positions], [run[key] for key in keys], color=colors[group],
                          s=20, alpha=0.65)
         for x, value in zip(positions, medians):
             axis.annotate(f"{value:.2f}", (x, value), xytext=(0, 10 + 10 * group_index),
@@ -142,7 +175,7 @@ def render(manifest_path, output):
     axis.legend(loc="upper left", frameon=False)
     figure.suptitle(manifest["title"] + "\nFrame-time percentiles", x=0.09, ha="left",
                    fontsize=15, fontweight="bold")
-    figure.text(0.09, 0.035, manifest["subtitle"] + "\nSquares: median across runs; whiskers: run-to-run range, not confidence intervals."
+    figure.text(0.09, 0.035, manifest["subtitle"] + "\nDots: individual runs; squares: median; whiskers: full run-to-run range, not confidence intervals."
                 if len(runs) > 2 else manifest["subtitle"] + "\nOne run per group; no repeatability estimate.", fontsize=10)
     figure.subplots_adjust(left=0.09, right=0.975, top=0.85, bottom=0.19)
     save(figure, output / "frame-time-percentiles")

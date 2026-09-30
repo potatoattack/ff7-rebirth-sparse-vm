@@ -1,8 +1,9 @@
 # Candidate validation — 30 September 2026
 
 This is source-package candidate **0.1.0-rc2**. The accepted E28 gameplay result
-is the reference. The new activation interface and public packages are not yet
-hardware-validated.
+remains the historical reference. The public packages and new activation
+interface now have six completed off/on gameplay captures on an RX 7900 XTX.
+The packaged native GPU suite and long-term stability remain unverified.
 
 rc2 opens eligible native discrete AMD GPUs to testing through capability
 checks. It adds a pre-Vega fragment-size check, generalizes native-test device
@@ -29,21 +30,40 @@ build, package installation, DKMS build, initramfs generation, boot test or GPU
 test. No new kernel or driver binary is distributed here. See
 `validation.json` for source/file hashes and recorded check details.
 
-## First hardware check
+## Packaged hardware evidence
 
-1. Preserve the accepted E28 setup as rollback. Build and install both recipes
-   using the README, then boot the new separately named kernel. Record any build
-   or boot integration errors rather than bypassing a failed step.
-2. Confirm another ordinary Vulkan workload still starts with the flag absent.
-3. For this initial packaging validation, run the optional native suite once
+The [30 September RX 7900 XTX comparison](../benchmarks/results/2026-09-30-rx7900xtx/README.md)
+records three complete 40-second runs per mode on
+`7.2.8-2-cachyos-sparse-vm`, with `linux-cachyos-sparse-vm 7.2.8-2` and
+`vulkan-radeon-sparse-vm 3:26.2.3-2` installed. The mapped RADV library matches
+the installed library. The v1 activation diagnostic is recorded as present
+only in enabled runs. All six use the same recorded binaries and saved gameplay
+settings. This establishes observed package installation, boot and short game
+operation with the new interface. It does not audit the full Arch build or
+bootloader hooks; those logs were not supplied.
+
+The median per-run P99 frame time fell from 38.47 to 27.50 ms. All measured
+windows completed, but five new crash-report-client configuration entries
+appeared between runs, after both off and on states. Their reports and kernel
+fault logs are absent, so clean shutdown and stability are not established.
+No new packaged native GPU results accompanied these captures; historical E22
+and E28 native results are not silently transferred to the public interface.
+
+## Remaining maintainer checks
+
+1. Preserve a known working kernel/driver for rollback. For each additional GPU,
+   build/install using the README and record build or boot integration errors.
+2. Confirm another ordinary Vulkan workload still starts with the flag absent;
+   the recorded off runs currently establish this only for Rebirth.
+3. For packaging validation, run the optional native suite once
    (`make -C tests self-test`, then
    `RADV_EXPERIMENTAL=sparse_vm bash tests/run-native.sh`). Keep its result/logs.
    This is a maintainer check, not a future player launch requirement.
-4. Launch Rebirth with the single flag. Compare the accepted save/settings and
-   camera movement against E28, then play normally. Capture whether the v1
-   activation message appeared, any remaining hitching, freezes or GPU faults.
+4. Play normally and check shutdown in both modes. Retain any crash report or
+   relevant kernel fault messages. For additional GPUs, record activation and
+   compare the same save/settings and camera movement with the feature off/on.
 
 No new graphics-setting experiment is requested. Passing means the packaging
 retains the accepted smoothness and stability while removing the setup burden.
-If it regresses, compare against the preserved E28 build before changing the
-mapping algorithm. Public release and wider hardware testing follow this check.
+If it regresses, compare against a preserved working build before changing the
+mapping algorithm. The project remains an experimental release candidate.

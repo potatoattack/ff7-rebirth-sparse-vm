@@ -16,10 +16,44 @@ The feature is disabled by default. `sparse_vm` is an option added by this
 project, **not an upstream Mesa option**.
 
 **Status: 0.1.0-rc2, experimental.** The underlying patches substantially
-improved gameplay on a Radeon RX 7900 XTX. This packaged version and its new
-activation interface still need hardware validation. Other eligible AMD GPUs
-are open for testing; equivalent performance and stability are not established.
-See [validation](docs/validation.md) for the checks performed so far.
+improved gameplay on a Radeon RX 7900 XTX. The public packages and activation
+interface now have six completed off/on gameplay captures on that GPU.
+Long-term stability and the packaged native GPU suite remain unverified.
+Other eligible AMD GPUs are open for testing; equivalent performance and
+stability are not established. See [validation](docs/validation.md).
+
+## Measured performance
+
+On an **RX 7900 XTX / Ryzen 9 9950X3D**, three 40-second Tower camera-rotation
+captures per mode show substantially shorter long frames. Both modes use the
+same packaged kernel and RADV, with `sparse_vm` off or on. Every recorded frame
+is included.
+
+| Metric | Feature off | Feature on | Change |
+| --- | ---: | ---: | ---: |
+| Average FPS | 64.9 | 74.9 | 15.4% higher |
+| P95 frame time | 27.17 ms | 17.76 ms | 34.6% lower |
+| P99 frame time | 38.47 ms | 27.50 ms | 28.5% lower |
+| P99.9 frame time | 49.80 ms | 30.42 ms | 38.9% lower |
+| Frames longer than 33.333 ms | 189 | 1 | Totals over ~120 s per mode |
+
+FPS and percentiles are medians of the three per-run results. The last row
+counts long frames across all three captures, not individual stutter events.
+
+![All six off/on frame-time traces](benchmarks/results/2026-09-30-rx7900xtx/graphs/frame-times.svg)
+
+![Frame-time percentiles with all runs and their range](benchmarks/results/2026-09-30-rx7900xtx/graphs/frame-time-percentiles.svg)
+
+Reported settings were 3840×2160 output, 100% scaling, high textures and
+`t.MaxFPS 0`; saved window dimensions were 3840×2134 in every run. The existing
+6000/5000 MB streaming-pool INI overrides were retained in both modes.
+Native Wine Wayland and HDR were enabled. Manual rotations are not
+camera-aligned, and MangoHud does not measure physical panel scanout.
+
+These results cover one scene and one GPU. New crash-report entries appeared
+between runs, so completed captures are not evidence of clean shutdown or
+long-term stability. See the [full results, settings, source data and reproduction
+command](benchmarks/results/2026-09-30-rx7900xtx/README.md).
 
 ## Requirements and scope
 
@@ -128,7 +162,8 @@ sudo pacman -R linux-cachyos-sparse-vm-headers linux-cachyos-sparse-vm
 For a repeatable frame-time comparison, see the
 [benchmark capture and graph instructions](benchmarks/README.md). They compare
 the same packaged kernel and driver with the feature off and on, using automatic
-MangoHud logging. A matched benchmark of the public package is still pending.
+MangoHud logging. The [first packaged-feature comparison](benchmarks/results/2026-09-30-rx7900xtx/README.md)
+includes all six runs and their source data.
 
 For a report, include your GPU model and PCI ID, repository revision, kernel and
 package versions, Proton version, display backend and launch options. Note
