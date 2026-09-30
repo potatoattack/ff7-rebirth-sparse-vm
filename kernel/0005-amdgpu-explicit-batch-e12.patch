@@ -1,0 +1,52 @@
+Subject: [E12] opt-in explicit batching; preserve cross mode across boots
+
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_gem.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_gem.c
+@@ -845,8 +845,12 @@
+ }
+ 
+ /* E07 changes only the private E04 operation. Read once per vector. */
+-static unsigned int ff7_vm_cross_bo;
++static unsigned int ff7_vm_cross_bo = 1;
+ static unsigned int ff7_vm_cross_bo_api = 1;
++/* E12: userspace has honored the sparse submission waits before this ioctl.
++ * E01 still downgrades unsafe BO lifetimes to ordinary implicit sync. */
++static unsigned int ff7_vm_batch_explicit_api = 1;
++module_param_named(ff7_vm_batch_explicit_api, ff7_vm_batch_explicit_api, uint, 0444);
+ static int ff7_vm_cross_bo_set(const char *val, const struct kernel_param *kp)
+ {
+ 	unsigned int mode;
+@@ -930,7 +934,8 @@
+ 	u64 end, vm_size;
+ 	int r = 0;
+ 
+-	if (!header->handle || header->_pad || header->flags || header->map_size ||
++	if (!header->handle || header->_pad ||
++	    (header->flags & ~AMDGPU_VM_EXPLICIT_SYNC) || header->map_size ||
+ 	    header->vm_timeline_point || header->vm_timeline_syncobj_out ||
+ 	    header->num_syncobj_handles || header->input_fence_syncobj_handles ||
+ 	    !header->offset_in_bo || header->offset_in_bo > AMDGPU_FF7_BATCH_MAX)
+@@ -973,6 +978,8 @@
+ 	}
+ 	bo = gem_to_amdgpu_bo(gobj);
+ 	amdgpu_vm_update_ctx_init(&ctx, adev, vm);
++	ctx.explicit_sync_unmap = header->flags & AMDGPU_VM_EXPLICIT_SYNC;
++	ctx.ff7_explicit_requested = ctx.explicit_sync_unmap;
+ 	drm_exec_init(&exec, DRM_EXEC_INTERRUPTIBLE_WAIT | DRM_EXEC_IGNORE_DUPLICATES, 0);
+ 	drm_exec_until_all_locked(&exec) {
+ 		r = drm_exec_lock_obj(&exec, gobj);
+@@ -1128,11 +1135,12 @@
+ 		return -EINVAL;
+ 	}
+ 
+-	/* E03 must be immediate and retain ordinary implicit unmap ordering. */
++	/* E12 permits E01 explicit sync on immediate E03 operations. The
++	 * existing update context retains its BO-lifetime fallback and move fences. */
+ 	if (args->flags & (AMDGPU_VM_FF7_ACCOUNT | AMDGPU_VM_FF7_DIRECT_REPLACE)) {
+ 		if (!(args->flags & AMDGPU_VM_FF7_ACCOUNT) ||
+ 		    args->operation != AMDGPU_VA_OP_REPLACE ||
+-		    args->flags & (AMDGPU_VM_DELAY_UPDATE | AMDGPU_VM_EXPLICIT_SYNC) ||
++		    args->flags & AMDGPU_VM_DELAY_UPDATE ||
+ 		    adev->debug_vm)
+ 			return -EINVAL;
+ 	}

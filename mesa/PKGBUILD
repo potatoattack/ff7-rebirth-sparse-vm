@@ -1,0 +1,57 @@
+# SPDX-License-Identifier: MIT
+pkgname=vulkan-radeon-sparse-vm
+pkgver=26.2.3
+epoch=3
+pkgrel=2
+pkgdesc='RADV with per-game opt-in AMDGPU sparse VM improvements'
+arch=(x86_64)
+url='https://www.mesa3d.org/'
+license=(MIT)
+depends=(expat libgcc libstdc++ glibc 'libdrm>=2.4.133' libelf libx11 libxcb libxrandr
+         libxshmfence wayland zlib zstd libdisplay-info systemd-libs spirv-tools
+         vulkan-icd-loader)
+makedepends=(meson ninja python-mako python-packaging python-yaml glslang
+             bison flex wayland-protocols vulkan-headers)
+provides=("vulkan-radeon=$epoch:$pkgver" vulkan-driver)
+conflicts=(vulkan-radeon)
+options=(!lto !debug)
+_commit=31e9a6b2e95e30d84bf3177d1f497d063e59b6b2
+_patches=(
+  0001-radv-per-submission-vm-batch-e09.patch
+  0002-radv-explicit-batch-e12.patch
+  0003-radv-api-owned-destroy-e16.patch
+  0004-radv-sparse-vm-opt-in.patch
+)
+source=("mesa-$_commit.tar.gz::https://codeload.github.com/chaotic-cx/mesa-mirror/tar.gz/$_commit"
+        "${_patches[@]}")
+sha256sums=(
+  '705946ae365b9138fb4fa23936def3c764c6dd053bb80ec925f97037c614b08b'
+  'fed03befc489d343a4fbf670c271b3d9c8d11ec3498ff8271357b4b97bf27cfc'
+  '047946d2cc7bf067bae575ccc51988ad3e40843f6d3c62b8b9c421556e748e0d'
+  'acf83e9438a1ece43d80f1cfd158e1bc6a5988405e24a35c02ea221dc40e331d'
+  'ec3639321330e148149d4062cead302a05f6a8d398efb12f04f67d93adc5faef'
+)
+
+prepare() {
+  cd "mesa-mirror-$_commit"
+  local patch
+  for patch in "${_patches[@]}"; do
+    patch --batch --forward --fuzz=0 -Np1 -i "$srcdir/$patch"
+  done
+}
+
+build() {
+  meson setup "mesa-mirror-$_commit" build --prefix=/usr --libdir=lib --buildtype=release \
+    -Dgallium-drivers=[] -Dvulkan-drivers=amd -Dplatforms=x11,wayland \
+    -Dglx=disabled -Degl=disabled -Dgbm=disabled -Dopengl=false \
+    -Dllvm=disabled -Damd-use-llvm=false -Dbuild-tests=false -Dvideo-codecs=[]
+  meson compile -C build
+}
+
+package() {
+  DESTDIR="$pkgdir" meson install -C build --no-rebuild
+  # The distribution's mesa package owns this shared configuration.
+  rm "$pkgdir/usr/share/drirc.d/00-mesa-defaults.conf"
+  install -Dm644 "mesa-mirror-$_commit/docs/license.rst" \
+    "$pkgdir/usr/share/licenses/$pkgname/license.rst"
+}

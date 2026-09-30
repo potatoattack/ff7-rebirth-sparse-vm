@@ -1,0 +1,180 @@
+From: FF7 local experiment
+Subject: [E27] retain leaf page tables in private-ABI NAVI31 VMs
+
+Keep the E24 split guard and all existing waits. No effect until a VM
+issues the private E03/E04 operation. New control/treatment VMs latch a
+mode once; default control. This is an experiment, not an upstream fix.
+
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_vm.h
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_vm.h
+@@ -457,6 +457,9 @@
+ 
+ 	unsigned int		pasid;
+ 	struct amdgpu_vmid	*reserved_vmid[AMDGPU_MAX_VMHUBS];
++
++	/* E27: 0 unselected, 1 control, 2 leaf-only; latched under root reservation. */
++	u8 ff7_leaf_policy;
+ 
+ 	/* Flag to indicate if VM tables are updated by CPU or GPU (SDMA) */
+ 	bool					use_cpu_for_update;
+@@ -562,6 +565,12 @@
+ 			  struct amdgpu_vm *vm, bool immediate);
+ int amdgpu_vm_ff7_replace(struct amdgpu_vm_update_ctx *ctx,
+ 			  struct amdgpu_bo_va *bo_va);
++void amdgpu_vm_ff7_latch_leaf_policy(struct amdgpu_device *adev,
++				    struct amdgpu_vm *vm);
++unsigned int amdgpu_vm_ff7_fragment_limit(struct amdgpu_vm_update_params *p,
++					 unsigned int original);
++void amdgpu_vm_ff7_note_pte_write(struct amdgpu_vm_update_params *p,
++				 enum amdgpu_vm_level level);
+ void amdgpu_vm_ff7_account_job(unsigned int mode);
+ void amdgpu_vm_ff7_account_error(void);
+ int amdgpu_vm_ff7_batch_replace(struct amdgpu_vm_update_ctx *ctx,
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_vm.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_vm.c
+@@ -46,6 +46,94 @@
+ #include "kfd_svm.h"
+ 
+ /* Private FF7 E01 experiment; opt-in remains per VA operation. */
++/* E27: latch a page-table policy only for the private E03/E04 ABI.
++ * The switch affects the first private operation in each VM. A live VM never
++ * switches back or changes policy when the module parameter is rewritten.
++ * No synchronization, lifetime, migration or TLB rule is relaxed here.
++ */
++static unsigned int ff7_vm_leaf_only;
++static unsigned int ff7_vm_leaf_only_api = 1;
++module_param_named(ff7_vm_leaf_only_api, ff7_vm_leaf_only_api, uint, 0444);
++static int ff7_vm_leaf_only_set(const char *val, const struct kernel_param *kp)
++{
++	unsigned int v;
++	int r = kstrtouint(val, 0, &v);
++
++	if (r || v > 1)
++		return -EINVAL;
++	WRITE_ONCE(*(unsigned int *)kp->arg, v);
++	return 0;
++}
++static const struct kernel_param_ops ff7_vm_leaf_only_ops = {
++	.set = ff7_vm_leaf_only_set,
++	.get = param_get_uint,
++};
++module_param_cb(ff7_vm_leaf_only, &ff7_vm_leaf_only_ops,
++		&ff7_vm_leaf_only, 0644);
++MODULE_PARM_DESC(ff7_vm_leaf_only,
++	"FF7 E27 opt-in PTB policy, latched at first private operation per VM");
++static atomic64_t ff7_e27_control_vms, ff7_e27_leaf_vms;
++static atomic64_t ff7_e27_fragments, ff7_e27_capped;
++static atomic64_t ff7_e27_leaf_writes, ff7_e27_upper_writes;
++static int ff7_vm_e27_stats_get(char *buffer, const struct kernel_param *kp)
++{
++	return scnprintf(buffer, PAGE_SIZE,
++		"control_vms=%lld leaf_vms=%lld fragments=%lld capped=%lld leaf_writes=%lld upper_writes=%lld\n",
++		(long long)atomic64_read(&ff7_e27_control_vms),
++		(long long)atomic64_read(&ff7_e27_leaf_vms),
++		(long long)atomic64_read(&ff7_e27_fragments),
++		(long long)atomic64_read(&ff7_e27_capped),
++		(long long)atomic64_read(&ff7_e27_leaf_writes),
++		(long long)atomic64_read(&ff7_e27_upper_writes));
++}
++static const struct kernel_param_ops ff7_vm_e27_stats_ops = {
++	.get = ff7_vm_e27_stats_get,
++};
++module_param_cb(ff7_vm_e27_stats, &ff7_vm_e27_stats_ops, NULL, 0444);
++
++void amdgpu_vm_ff7_latch_leaf_policy(struct amdgpu_device *adev,
++				    struct amdgpu_vm *vm)
++{
++	dma_resv_assert_held(vm->root.bo->tbo.base.resv);
++	if (vm->ff7_leaf_policy || adev->debug_vm ||
++	    adev->pdev->device != 0x744c ||
++	    vm->update_funcs != &amdgpu_vm_sdma_funcs ||
++	    adev->vm_manager.block_size <= 4 || vm->is_compute_context)
++		return;
++	if (READ_ONCE(ff7_vm_leaf_only)) {
++		WRITE_ONCE(vm->ff7_leaf_policy, 2);
++		atomic64_inc(&ff7_e27_leaf_vms);
++	} else {
++		WRITE_ONCE(vm->ff7_leaf_policy, 1);
++		atomic64_inc(&ff7_e27_control_vms);
++	}
++}
++
++unsigned int amdgpu_vm_ff7_fragment_limit(struct amdgpu_vm_update_params *p,
++					 unsigned int original)
++{
++	unsigned int limit;
++
++	if (READ_ONCE(p->vm->ff7_leaf_policy) != 2)
++		return original;
++	limit = min(original, p->adev->vm_manager.block_size - 1u);
++	atomic64_inc(&ff7_e27_fragments);
++	if (limit < original)
++		atomic64_inc(&ff7_e27_capped);
++	return limit;
++}
++
++void amdgpu_vm_ff7_note_pte_write(struct amdgpu_vm_update_params *p,
++				 enum amdgpu_vm_level level)
++{
++	if (READ_ONCE(p->vm->ff7_leaf_policy) != 2 || p->unlocked)
++		return;
++	if (level == AMDGPU_VM_PTB)
++		atomic64_inc(&ff7_e27_leaf_writes);
++	else
++		atomic64_inc(&ff7_e27_upper_writes);
++}
++
+ static unsigned int ff7_vm_explicit_sync = 1;
+ module_param_named(ff7_vm_explicit_sync, ff7_vm_explicit_sync, uint, 0444);
+ MODULE_PARM_DESC(ff7_vm_explicit_sync, "FF7 E01 explicit-unmap ABI marker");
+@@ -3113,6 +3201,7 @@
+ 	struct amdgpu_bo_vm *root;
+ 	int r, i;
+ 
++	vm->ff7_leaf_policy = 0;
+ 	vm->va = RB_ROOT_CACHED;
+ 	for (i = 0; i < AMDGPU_MAX_VMHUBS; i++)
+ 		vm->reserved_vmid[i] = NULL;
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_vm_pt.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_vm_pt.c
+@@ -778,6 +778,13 @@
+ 		max_frag = params->adev->vm_manager.fragment_size;
+ 	else
+ 		max_frag = 31;
++
++	/* Retain PTB leaves for this opted-in VM, including holes/clears.
++	 * Existing large mappings remain protected by the E24 split guard.
++	 * Keeping frag below PDB0 shift prevents later promotion/freeing of
++	 * those leaves. Other VMs keep the original fragment policy.
++	 */
++	max_frag = amdgpu_vm_ff7_fragment_limit(params, max_frag);
+ 
+ 	/* system pages are non continuously */
+ 	if (params->pages_addr) {
+@@ -931,6 +938,7 @@
+ 						    upd_flags,
+ 						    vm->task_info ? vm->task_info->tgid : 0,
+ 						    vm->immediate.fence_context);
++			amdgpu_vm_ff7_note_pte_write(params, cursor.level);
+ 			r = amdgpu_vm_pte_update_flags(params, to_amdgpu_bo_vm(pt),
+ 						   cursor.level, pe_start, dst,
+ 						   nptes, incr, upd_flags);
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_gem.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_gem.c
+@@ -1042,6 +1042,7 @@
+ 			++cross_entries;
+ 		}
+ 	}
++	amdgpu_vm_ff7_latch_leaf_policy(adev, vm);
+ 	for (i = 0; i < count; ++i) {
+ 		struct drm_amdgpu_gem_va *e = &entries[i];
+ 		r = amdgpu_vm_bo_replace_map(&ctx, bo_va, e->va_address,
+@@ -1247,6 +1248,8 @@
+ 						args->map_size);
+ 		break;
+ 	case AMDGPU_VA_OP_REPLACE:
++		if (update_ctx.ff7_e03_mode)
++			amdgpu_vm_ff7_latch_leaf_policy(adev, &fpriv->vm);
+ 		r = amdgpu_vm_bo_replace_map(&update_ctx, bo_va,
+ 					     args->va_address,
+ 					     args->offset_in_bo, args->map_size,

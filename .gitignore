@@ -1,0 +1,10 @@
+**/src/
+**/pkg/
+**/build/
+**/*.pkg.tar.*
+kernel/*.tar.gz
+mesa/*.tar.gz
+tests/results-*/
+__pycache__/
+*.pyc
+*.o

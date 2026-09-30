@@ -1,0 +1,263 @@
+Subject: [PATCH] radv: expose sparse_vm through RADV_EXPERIMENTAL
+
+Source packaging of the accepted E28 profile. Private ABI, default off.
+Retain mapping, split-guard and lifetime behavior; replace global selection.
+
+diff --git a/docs/envvars.rst b/docs/envvars.rst
+index 068bd19..6951612 100644
+--- a/docs/envvars.rst
++++ b/docs/envvars.rst
+@@ -2453,3 +2453,16 @@ are documented here as we reference them in other places in our docs.
+ 
+ .. _Vulkan loader docs on environment variables: https://github.com/KhronosGroup/Vulkan-Loader/blob/main/docs/LoaderInterfaceArchitecture.md#table-of-debug-environment-variables
+ .. _Deprecated: https://github.com/KhronosGroup/Vulkan-Loader/blob/main/docs/LoaderInterfaceArchitecture.md#deprecated-environment-variables
++
++Private sparse VM experiment
++----------------------------
++
++This source package adds ``sparse_vm`` to :envvar:`RADV_EXPERIMENTAL`. It requires
++the matching private AMDGPU sparse-VM protocol v1 and a native discrete AMD GPU
++with normal RADV sparse support. Other GPU families are experimental; the
++RX 7900 XTX is the only device with gameplay validation of the original profile.
++It enables the accepted mapping, leaf-table and guarded cleanup profile for
++that device's DRM VM. Unset it for the ordinary RADV path. It is not upstream.
++
++``RADV_SPARSE_VM_STATS_DIR`` optionally names an existing directory for small
++developer counter files. It is ignored unless ``sparse_vm`` is enabled.
+diff --git a/include/drm-uapi/amdgpu_drm.h b/include/drm-uapi/amdgpu_drm.h
+index e0859e2..4484510 100644
+--- a/include/drm-uapi/amdgpu_drm.h
++++ b/include/drm-uapi/amdgpu_drm.h
+@@ -580,6 +580,18 @@ struct drm_amdgpu_userq_wait {
+ #define AMDGPU_VM_OP_RESERVE_VMID	1
+ #define AMDGPU_VM_OP_UNRESERVE_VMID	2
+ 
++
++/* Private sparse-VM protocol v1. Not an upstream Linux UAPI assignment.
++ * QUERY: in.flags = 0, no state change.
++ * ENABLE: in.flags = 1, enable the complete profile for this DRM file's VM.
++ * Both return AMDGPU_VM_SPARSE_V1_TOKEN in out.flags on success. Unsupported
++ * hardware/update mode returns EOPNOTSUPP. Unknown version returns EINVAL.
++ * Enable is idempotent and persists until the VM is destroyed; no live reset.
++ */
++#define AMDGPU_VM_OP_SPARSE_QUERY  0x53560001u
++#define AMDGPU_VM_OP_SPARSE_ENABLE 0x53560002u
++#define AMDGPU_VM_SPARSE_V1_TOKEN  0x53564d3100000001ULL
++
+ struct drm_amdgpu_vm_in {
+ 	/** AMDGPU_VM_OP_* */
+ 	__u32	op;
+diff --git a/src/amd/vulkan/radv_device.c b/src/amd/vulkan/radv_device.c
+index 486cef2..f69d966 100644
+--- a/src/amd/vulkan/radv_device.c
++++ b/src/amd/vulkan/radv_device.c
+@@ -1343,7 +1343,8 @@ radv_create_winsys(struct radv_device *device)
+    const bool is_virtio =
+       pdev->drm_device_type == RADV_DRM_DEVICE_AMDGPU_VPIPE || pdev->drm_device_type == RADV_DRM_DEVICE_VIRTIO;
+ 
+-   result = radv_amdgpu_winsys_create(fd, &pdev->info, instance->debug_flags, instance->perftest_flags, is_virtio,
++   result = radv_amdgpu_winsys_create(fd, &pdev->info, instance->debug_flags, instance->perftest_flags,
++                                      instance->experimental_flags, is_virtio,
+                                       &device->ws);
+ 
+    if (fd != -1)
+diff --git a/src/amd/vulkan/radv_instance.c b/src/amd/vulkan/radv_instance.c
+index e6407ac..9a18173 100644
+--- a/src/amd/vulkan/radv_instance.c
++++ b/src/amd/vulkan/radv_instance.c
+@@ -140,6 +140,7 @@ static const struct debug_control radv_experimental_options[] = {
+    {"sparse", RADV_EXPERIMENTAL_SPARSE},
+    {"bfloat16", RADV_EXPERIMENTAL_BFLOAT16},
+    {"msrtss", RADV_EXPERIMENTAL_MSRTSS},
++   {"sparse_vm", RADV_EXPERIMENTAL_SPARSE_VM},
+    {NULL, 0},
+ };
+ 
+diff --git a/src/amd/vulkan/radv_instance.h b/src/amd/vulkan/radv_instance.h
+index e8e6f67..ab167eb 100644
+--- a/src/amd/vulkan/radv_instance.h
++++ b/src/amd/vulkan/radv_instance.h
+@@ -131,6 +131,7 @@ enum {
+    RADV_EXPERIMENTAL_SPARSE = 1u << 5,
+    RADV_EXPERIMENTAL_BFLOAT16 = 1u << 6,
+    RADV_EXPERIMENTAL_MSRTSS = 1u << 7,
++   RADV_EXPERIMENTAL_SPARSE_VM = 1u << 8,
+ };
+ 
+ enum {
+diff --git a/src/amd/vulkan/winsys/amdgpu/radv_amdgpu_bo.c b/src/amd/vulkan/winsys/amdgpu/radv_amdgpu_bo.c
+index fcd1002..7d520c3 100644
+--- a/src/amd/vulkan/winsys/amdgpu/radv_amdgpu_bo.c
++++ b/src/amd/vulkan/winsys/amdgpu/radv_amdgpu_bo.c
+@@ -38,13 +38,7 @@
+ static bool
+ radv_amdgpu_ff7_destroy_init(struct radv_amdgpu_winsys *ws)
+ {
+-   const char *mode = getenv("RADV_FF7_EXPLICIT_DESTROY");
+-   const char *dir = getenv("RADV_FF7_DESTROY_STATS_DIR");
+-   if (!mode && !dir)
+-      return true;
+-   if (!mode || (strcmp(mode, "0") && strcmp(mode, "1")) || !ws->base.ff7_explicit_unmap)
+-      return false;
+-   ws->ff7_explicit_destroy = !strcmp(mode, "1");
++   const char *dir = getenv("RADV_SPARSE_VM_STATS_DIR");
+    if (dir) {
+       char path[4096];
+       int n = snprintf(path, sizeof(path), "%s/destroy-%ld-%p.bin", dir, (long)getpid(), (void *)ws);
+@@ -67,8 +61,6 @@ radv_amdgpu_ff7_destroy_init(struct radv_amdgpu_winsys *ws)
+       ws->ff7_destroy_stats[2] = getpid();
+       ws->ff7_destroy_stats[3] = ws->ff7_explicit_destroy;
+    }
+-   fprintf(stderr, "FF7_E16_RADV_v1: pid=%ld explicit_destroy=%u scope=api_owned kernel_lifetime_guard=retained\n",
+-           (long)getpid(), ws->ff7_explicit_destroy);
+    return true;
+ }
+ 
+@@ -104,72 +96,43 @@ radv_amdgpu_ff7_destroy_done(struct radv_amdgpu_winsys *ws, bool explicit_sync,
+ }
+ 
+ bool
+-radv_amdgpu_ff7_init(struct radv_amdgpu_winsys *ws, bool is_virtio)
++radv_amdgpu_ff7_init(struct radv_amdgpu_winsys *ws, bool is_virtio, uint64_t experimental_flags)
+ {
+-   const char *mode = getenv("RADV_FF7_VM_MODE");
+-   if (!mode || !*mode || !strcmp(mode, "off"))
++   if (!(experimental_flags & RADV_EXPERIMENTAL_SPARSE_VM))
+       return true;
+-   /* This experiment has only been checked for the supplied NAVI31 hardware. */
+-   if (is_virtio || ws->info.pci_id != 0x744c)
+-      return true;
+-   if (!strcmp(mode, "baseline"))
+-      ws->ff7_vm_mode = FF7_VM_BASELINE;
+-   else if (!strcmp(mode, "direct"))
+-      ws->ff7_vm_mode = FF7_VM_DIRECT_MODE;
+-   else if (!strcmp(mode, "batch"))
+-      ws->ff7_vm_mode = FF7_VM_BATCH_MODE;
+-   else {
+-      fprintf(stderr, "FF7_E05: invalid RADV_FF7_VM_MODE.\n");
+-      return false;
+-   }
+-   char marker[16] = {0};
+-   FILE *f = fopen("/sys/module/amdgpu/parameters/ff7_vm_batch_replace", "r");
+-   if (f) {
+-      if (!fgets(marker, sizeof(marker), f))
+-         marker[0] = 0;
+-      fclose(f);
+-   }
+-   if (strcmp(marker, "1\n")) {
+-      fprintf(stderr, "FF7_E05: expected E04 kernel marker missing; rejecting requested mode.\n");
++
++   /* Respect RADV's normal sparse support; do not force it on older GPUs. */
++   if (is_virtio || !ws->info.has_dedicated_vram || !ws->info.has_graphics || !ws->info.has_sparse) {
++      fprintf(stderr, "radv: sparse_vm requires a native discrete GPU with normal RADV sparse support.\n");
+       return false;
+    }
+-   const char *split = getenv("RADV_FF7_SPLIT_REJECTED");
+-   if (split && strcmp(split, "0") && strcmp(split, "1")) {
+-      fprintf(stderr, "FF7_E09: RADV_FF7_SPLIT_REJECTED must be 0 or 1.\n");
++
++   union drm_amdgpu_vm request = {.in = {.op = AMDGPU_VM_OP_SPARSE_QUERY}};
++   int r = drm_ioctl_write_read(ws->fd, DRM_AMDGPU_VM, &request, sizeof(request));
++   if (r || request.out.flags != AMDGPU_VM_SPARSE_V1_TOKEN) {
++      fprintf(stderr, "radv: sparse_vm kernel protocol v1 is unavailable (%d). "
++                      "Boot the matching patched kernel or remove sparse_vm.\n", r);
+       return false;
+    }
+-   ws->ff7_split_rejected = split && !strcmp(split, "1");
+-   if (ws->ff7_split_rejected && ws->ff7_vm_mode != FF7_VM_BATCH_MODE)
+-      return false;
+-   const char *explicit_mode = getenv("RADV_FF7_EXPLICIT_UNMAP");
+-   if (explicit_mode && strcmp(explicit_mode, "0") && strcmp(explicit_mode, "1")) {
+-      fprintf(stderr, "FF7_E12: explicit mode must be 0 or 1.\n");
++
++   request = (union drm_amdgpu_vm){.in = {.op = AMDGPU_VM_OP_SPARSE_ENABLE, .flags = 1}};
++   r = drm_ioctl_write_read(ws->fd, DRM_AMDGPU_VM, &request, sizeof(request));
++   if (r || request.out.flags != AMDGPU_VM_SPARSE_V1_TOKEN) {
++      fprintf(stderr, "radv: sparse_vm could not enable protocol v1 (%d).\n", r);
+       return false;
+    }
+-   ws->base.ff7_explicit_unmap = explicit_mode && !strcmp(explicit_mode, "1");
+-   if (ws->base.ff7_explicit_unmap) {
+-      if (ws->ff7_vm_mode != FF7_VM_BATCH_MODE || ws->ff7_split_rejected)
+-         return false;
+-      memset(marker, 0, sizeof(marker));
+-      f = fopen("/sys/module/amdgpu/parameters/ff7_vm_batch_explicit_api", "r");
+-      if (f) {
+-         if (!fgets(marker, sizeof(marker), f))
+-            marker[0] = 0;
+-         fclose(f);
+-      }
+-      if (strcmp(marker, "1\n")) {
+-         fprintf(stderr, "FF7_E12: explicit batching kernel API is missing.\n");
+-         return false;
+-      }
+-   }
++
++   /* The complete accepted E28 profile. No independent synchronization knobs. */
++   ws->ff7_vm_mode = FF7_VM_BATCH_MODE;
++   ws->ff7_split_rejected = false;
++   ws->base.ff7_explicit_unmap = true;
++   ws->ff7_explicit_destroy = true;
+    if (!radv_amdgpu_ff7_destroy_init(ws)) {
+-      fprintf(stderr, "FF7_E16: invalid mode or cannot initialize private counters.\n");
++      fprintf(stderr, "radv: sparse_vm could not open optional diagnostic counters.\n");
+       return false;
+    }
+-   fprintf(stderr, "FF7_E12_RADV_v1: explicit_unmap=%u dedicated_sparse=implicit\n",
+-           ws->base.ff7_explicit_unmap);
+-   fprintf(stderr, "FF7_E09_RADV_v1: pid=%ld mode=%s split_rejected=%u device=0x744c max_entries=16\n",
+-           (long)getpid(), mode, ws->ff7_split_rejected);
++   fprintf(stderr, "radv: sparse_vm v1 enabled for this device VM "
++                   "(batch, cross-BO, leaf tables, guarded direct, API-owned cleanup).\n");
+    return true;
+ }
+ 
+diff --git a/src/amd/vulkan/winsys/amdgpu/radv_amdgpu_winsys.c b/src/amd/vulkan/winsys/amdgpu/radv_amdgpu_winsys.c
+index 3f901fd..2fdd5cc 100644
+--- a/src/amd/vulkan/winsys/amdgpu/radv_amdgpu_winsys.c
++++ b/src/amd/vulkan/winsys/amdgpu/radv_amdgpu_winsys.c
+@@ -221,7 +221,7 @@ radv_amdgpu_winsys_unreserve_vmid(struct radeon_winsys *rws)
+ 
+ VkResult
+ radv_amdgpu_winsys_create(int fd, const struct radeon_info *info, uint64_t debug_flags, uint64_t perftest_flags,
+-                          bool is_virtio, struct radeon_winsys **winsys)
++                          uint64_t experimental_flags, bool is_virtio, struct radeon_winsys **winsys)
+ {
+    VkResult result = VK_SUCCESS;
+ 
+@@ -251,7 +251,7 @@ radv_amdgpu_winsys_create(int fd, const struct radeon_info *info, uint64_t debug
+    }
+ 
+    memcpy(&ws->info, info, sizeof(ws->info));
+-   if (!radv_amdgpu_ff7_init(ws, is_virtio)) {
++   if (!radv_amdgpu_ff7_init(ws, is_virtio, experimental_flags)) {
+       result = VK_ERROR_INITIALIZATION_FAILED;
+       goto winsys_fail;
+    }
+diff --git a/src/amd/vulkan/winsys/amdgpu/radv_amdgpu_winsys.h b/src/amd/vulkan/winsys/amdgpu/radv_amdgpu_winsys.h
+index f2ab289..5def4db 100644
+--- a/src/amd/vulkan/winsys/amdgpu/radv_amdgpu_winsys.h
++++ b/src/amd/vulkan/winsys/amdgpu/radv_amdgpu_winsys.h
+@@ -38,7 +38,7 @@ struct radv_amdgpu_alloc_tracker {
+ };
+ 
+ struct radv_amdgpu_winsys;
+-bool radv_amdgpu_ff7_init(struct radv_amdgpu_winsys *ws, bool is_virtio);
++bool radv_amdgpu_ff7_init(struct radv_amdgpu_winsys *ws, bool is_virtio, uint64_t experimental_flags);
+ void radv_amdgpu_ff7_destroy_finish(struct radv_amdgpu_winsys *ws);
+ 
+ struct radv_amdgpu_winsys {
+diff --git a/src/amd/vulkan/winsys/amdgpu/radv_amdgpu_winsys_public.h b/src/amd/vulkan/winsys/amdgpu/radv_amdgpu_winsys_public.h
+index cc3a484..7d76f74 100644
+--- a/src/amd/vulkan/winsys/amdgpu/radv_amdgpu_winsys_public.h
++++ b/src/amd/vulkan/winsys/amdgpu/radv_amdgpu_winsys_public.h
+@@ -18,7 +18,8 @@
+ #include "vk_sync.h"
+ 
+ VkResult radv_amdgpu_winsys_create(int fd, const struct radeon_info *info, uint64_t debug_flags,
+-                                   uint64_t perftest_flags, bool is_virtio, struct radeon_winsys **winsys);
++                                   uint64_t perftest_flags, uint64_t experimental_flags, bool is_virtio,
++                                   struct radeon_winsys **winsys);
+ 
+ struct radeon_winsys_info {
+    struct radeon_info base;

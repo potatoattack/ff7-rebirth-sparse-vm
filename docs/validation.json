@@ -1,0 +1,123 @@
+{
+  "candidate": "0.1.0-rc2",
+  "date": "2026-09-30",
+  "hardware_validation": "pending",
+  "arch_makepkg_kernel_install_boot_validation": "pending",
+  "source_sha256": {
+    "kernel/0001-amdgpu-explicit-unmap-e01.patch": "1d0cf7ee6f03e01899ab1bc6364749cf99923e3264ab81e1a216533061584972",
+    "kernel/0002-amdgpu-direct-replace-e03.patch": "1e6e13b5f106dc177a7486d2072e665d02219a5cb77b4c1001c85444e7dc7d01",
+    "kernel/0003-amdgpu-bounded-batch-e04.patch": "efebd3f4c6d9de0bcafcbbbe80e7dd9530299e5cc6ff8aec41b778a8ce3d1ae4",
+    "kernel/0004-amdgpu-cross-bo-e07.patch": "a2f129fe25cd87d8c0d3b80f3b532a0cdb378056e5f0be12f7ae51df77c9aaa9",
+    "kernel/0005-amdgpu-explicit-batch-e12.patch": "72c48c12bcb63449d3cb2aed3d506fe7502c339a90c26637449828b2dedc0477",
+    "kernel/0006-amdgpu-explicit-direct-e13.patch": "0c4b46c4cc762107e87a7985a2676beffd2ffa86176eeffdd7c285ab14dc3f95",
+    "kernel/0007-amdgpu-partial-split-guard-e24.patch": "57fbd1b44d005ca685933b15acac1d4e9135b36b528c215cf5f9b4f6e00022d6",
+    "kernel/0008-amdgpu-leaf-retention-e27.patch": "b3f3a4096094df76044a776e71d7254ad6e494f67a255d5e41630c1628b3b666",
+    "kernel/0009-amdgpu-per-vm-opt-in.patch": "abba26eff65676bb79d3b8cd1684f2e332d6c37e91b0d86ca2564dfbd15f5c8a",
+    "kernel/PKGBUILD": "6ab1233de9a45bb00e27f9320c99bbf3877305b22cc4d5da0f25374a11736d36",
+    "kernel/config": "3df33112e3357feb6a899bbfc006f2ded15226d1b2eb741ac986d581b9ca7773",
+    "mesa/0001-radv-per-submission-vm-batch-e09.patch": "fed03befc489d343a4fbf670c271b3d9c8d11ec3498ff8271357b4b97bf27cfc",
+    "mesa/0002-radv-explicit-batch-e12.patch": "047946d2cc7bf067bae575ccc51988ad3e40843f6d3c62b8b9c421556e748e0d",
+    "mesa/0003-radv-api-owned-destroy-e16.patch": "acf83e9438a1ece43d80f1cfd158e1bc6a5988405e24a35c02ea221dc40e331d",
+    "mesa/0004-radv-sparse-vm-opt-in.patch": "ec3639321330e148149d4062cead302a05f6a8d398efb12f04f67d93adc5faef",
+    "mesa/PKGBUILD": "f4ede3cc6ae38baa715ed933bdfc40e8b08d53c36f93b36f1410c39e71fb08e2"
+  },
+  "kernel": {
+    "clean_patch_application": true,
+    "modified_files": 14,
+    "compiled_translation_units": [
+      "amdgpu_amdkfd_gpuvm.o",
+      "amdgpu_cs.o",
+      "amdgpu_csa.o",
+      "amdgpu_dma_buf.o",
+      "amdgpu_gem.o",
+      "amdgpu_kms.o",
+      "amdgpu_seq64.o",
+      "amdgpu_userq.o",
+      "amdgpu_vm.o",
+      "amdgpu_vm_pt.o",
+      "amdgpu_vm_sdma.o",
+      "mes_v12_1.o"
+    ],
+    "compiler": "cc (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0",
+    "full_kernel_linked": false,
+    "rc2_recompiled_translation_units": [
+      "amdgpu_vm.o"
+    ]
+  },
+  "radv": {
+    "clean_patch_application": true,
+    "modified_files": 17,
+    "complete_build_and_link": true,
+    "wayland": true,
+    "x11": true,
+    "llvm": false,
+    "package_function_staged": true,
+    "package_files": [
+      "usr/lib/libvulkan_radeon.so",
+      "usr/share/drirc.d/00-radv-defaults.conf",
+      "usr/share/licenses/vulkan-radeon-sparse-vm/license.rst",
+      "usr/share/vulkan/icd.d/radeon_icd.x86_64.json"
+    ],
+    "icd_library_path": "/usr/lib/libvulkan_radeon.so",
+    "staging_rpath": false,
+    "local_validation_binary_sha256": "512a24835a61e463ebdec1c913b4d17f74a95db207e9bed60605b7ea287e4850",
+    "binary_distributed": false,
+    "rc2_incremental_rebuild_and_link": true
+  },
+  "tests": {
+    "host_regressions": "passed",
+    "native_both_compiled": "passed",
+    "native_cpu_self_tests": "passed",
+    "native_gpu": "not run",
+    "native_validator_fixture_tests": 4,
+    "recipe_bash_syntax": "passed",
+    "shellcheck_error_level": "passed",
+    "batch_header_from_supplied_patched_mesa": true
+  },
+  "notes": [
+    "Local compilation uses Ubuntu and a private build dependency prefix. It is not an Arch package installation.",
+    "E28 game evidence applies to the original setup. New per-VM activation and package boot need hardware testing.",
+    "The old long-probe test had 0/16 pending observations in accepted E28; E22 tiny probes establish overlap.",
+    "rc2 replaces GPU ID checks with capability/VM checks. Only amdgpu_vm.c and RADV init/docs differ from the previously compiled driver/kernel; unaffected compiled objects are reused."
+  ],
+  "hardware_scope": {
+    "pci_model_allowlist": false,
+    "required": [
+      "native discrete AMD GPU",
+      "normal RADV sparse support",
+      "graphics capability",
+      "matching kernel protocol",
+      "SDMA VM updater",
+      "eligible page-table/fragment geometry"
+    ],
+    "excluded": [
+      "APU",
+      "VirtIO",
+      "SR-IOV virtual function",
+      "compute VM",
+      "debug VM",
+      "CPU VM updater"
+    ],
+    "original_game_evidence": [
+      "RX 7900 XTX"
+    ],
+    "new_candidate_gpu_tests": "not run"
+  },
+  "rc2_checks": {
+    "all_source_inputs_verified": 16,
+    "zero_fuzz_kernel_patches": 9,
+    "zero_fuzz_mesa_patches": 4,
+    "unchanged_accepted_kernel_patches": 8,
+    "unchanged_accepted_mesa_patches": 3,
+    "sdma_contiguous_packet_dwords": {
+      "sdma_v3_0.c": 10,
+      "sdma_v4_0.c": 10,
+      "sdma_v4_4_2.c": 10,
+      "sdma_v5_0.c": 10,
+      "sdma_v5_2.c": 10,
+      "sdma_v6_0.c": 10,
+      "sdma_v7_0.c": 10,
+      "sdma_v7_1.c": 10
+    }
+  }
+}

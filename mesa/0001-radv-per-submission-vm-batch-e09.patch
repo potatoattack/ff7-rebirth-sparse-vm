@@ -1,0 +1,672 @@
+From: FF7 local performance investigation
+Subject: [E09] RADV bounded retry of rejected consecutive sparse groups
+
+Same pinned Mesa and E05 integration. New switch defaults to disabled.
+E07 kernel guards and original scalar fallback remain authoritative.
+Only EOPNOTSUPP permits retry; keep order, bounded work and terminal errors.
+
+--- a/src/amd/vulkan/radv_buffer.c
++++ b/src/amd/vulkan/radv_buffer.c
+@@ -308,14 +308,14 @@
+ 
+ VkResult
+ radv_bo_virtual_bind(struct radv_device *device, struct vk_object_base *object, struct radeon_winsys_bo *parent,
+-                     uint64_t offset, uint64_t size, struct radeon_winsys_bo *bo, uint64_t bo_offset)
++                     uint64_t offset, uint64_t size, struct radeon_winsys_bo *bo, uint64_t bo_offset, void *batch)
+ {
+    struct radv_physical_device *pdev = radv_device_physical(device);
+    struct radv_instance *instance = radv_physical_device_instance(pdev);
+    struct radeon_winsys *ws = device->ws;
+    VkResult result;
+ 
+-   result = ws->buffer_virtual_bind(ws, parent, offset, size, bo, bo_offset);
++   result = ws->buffer_virtual_bind(ws, parent, offset, size, bo, bo_offset, batch);
+    if (result != VK_SUCCESS)
+       return result;
+ 
+--- a/src/amd/vulkan/radv_buffer.h
++++ b/src/amd/vulkan/radv_buffer.h
+@@ -37,7 +37,7 @@
+ 
+ VkResult radv_bo_virtual_bind(struct radv_device *device, struct vk_object_base *object,
+                               struct radeon_winsys_bo *parent, uint64_t offset, uint64_t size,
+-                              struct radeon_winsys_bo *bo, uint64_t bo_offset);
++                              struct radeon_winsys_bo *bo, uint64_t bo_offset, void *batch);
+ 
+ void radv_bo_destroy(struct radv_device *device, struct vk_object_base *object, struct radeon_winsys_bo *bo);
+ 
+--- a/src/amd/vulkan/radv_queue.c
++++ b/src/amd/vulkan/radv_queue.c
+@@ -36,7 +36,7 @@
+ }
+ 
+ static VkResult
+-radv_sparse_buffer_bind_memory(struct radv_device *device, const VkSparseBufferMemoryBindInfo *bind)
++radv_sparse_buffer_bind_memory(struct radv_device *device, const VkSparseBufferMemoryBindInfo *bind, void *batch)
+ {
+    VK_FROM_HANDLE(radv_buffer, buffer, bind->buffer);
+    VkResult result = VK_SUCCESS;
+@@ -66,7 +66,7 @@
+       }
+       if (size) {
+          result = radv_bo_virtual_bind(device, &buffer->vk.base, buffer->bo, resourceOffset, size, mem ? mem->bo : NULL,
+-                                       memoryOffset);
++                                       memoryOffset, batch);
+          if (result != VK_SUCCESS)
+             return result;
+       }
+@@ -77,14 +77,14 @@
+    }
+    if (size) {
+       result = radv_bo_virtual_bind(device, &buffer->vk.base, buffer->bo, resourceOffset, size, mem ? mem->bo : NULL,
+-                                    memoryOffset);
++                                    memoryOffset, batch);
+    }
+ 
+    return result;
+ }
+ 
+ static VkResult
+-radv_sparse_image_opaque_bind_memory(struct radv_device *device, const VkSparseImageOpaqueMemoryBindInfo *bind)
++radv_sparse_image_opaque_bind_memory(struct radv_device *device, const VkSparseImageOpaqueMemoryBindInfo *bind, void *batch)
+ {
+    VK_FROM_HANDLE(radv_image, image, bind->image);
+    VkResult result;
+@@ -96,7 +96,7 @@
+          mem = radv_device_memory_from_handle(bind->pBinds[i].memory);
+ 
+       result = radv_bo_virtual_bind(device, &image->vk.base, image->bindings[0].bo, bind->pBinds[i].resourceOffset,
+-                                    bind->pBinds[i].size, mem ? mem->bo : NULL, bind->pBinds[i].memoryOffset);
++                                    bind->pBinds[i].size, mem ? mem->bo : NULL, bind->pBinds[i].memoryOffset, batch);
+       if (result != VK_SUCCESS)
+          return result;
+    }
+@@ -105,7 +105,7 @@
+ }
+ 
+ static VkResult
+-radv_sparse_image_bind_memory(struct radv_device *device, const VkSparseImageMemoryBindInfo *bind)
++radv_sparse_image_bind_memory(struct radv_device *device, const VkSparseImageMemoryBindInfo *bind, void *batch)
+ {
+    VK_FROM_HANDLE(radv_image, image, bind->image);
+    const struct radv_physical_device *pdev = radv_device_physical(device);
+@@ -158,7 +158,7 @@
+       if (whole_subres) {
+          uint64_t size = (uint64_t)aligned_extent_width * aligned_extent_height * aligned_extent_depth * bs;
+          result = radv_bo_virtual_bind(device, &image->vk.base, image->bindings[0].bo, offset, size,
+-                                       mem ? mem->bo : NULL, mem_offset);
++                                       mem ? mem->bo : NULL, mem_offset, batch);
+          if (result != VK_SUCCESS)
+             return result;
+       } else {
+@@ -173,7 +173,7 @@
+ 
+                result = radv_bo_virtual_bind(device, &image->vk.base, image->bindings[0].bo, bo_offset, size,
+                                              mem ? mem->bo : NULL,
+-                                             mem_offset + (uint64_t)mem_y_increment * y + mem_z_increment * z);
++                                             mem_offset + (uint64_t)mem_y_increment * y + mem_z_increment * z, batch);
+                if (result != VK_SUCCESS)
+                   return result;
+             }
+@@ -187,25 +187,42 @@
+ static VkResult
+ radv_queue_submit_bind_sparse_memory(struct radv_device *device, struct vk_queue_submit *submission)
+ {
++   if (!submission->buffer_bind_count && !submission->image_opaque_bind_count && !submission->image_bind_count)
++      return VK_SUCCESS;
++
++   struct radeon_winsys *ws = device->ws;
++   void *batch = NULL;
++   VkResult result = VK_SUCCESS;
++   if (ws->sparse_bind_begin) {
++      result = ws->sparse_bind_begin(ws, &batch);
++      if (result != VK_SUCCESS)
++         return result;
++   }
++
+    for (uint32_t i = 0; i < submission->buffer_bind_count; ++i) {
+-      VkResult result = radv_sparse_buffer_bind_memory(device, submission->buffer_binds + i);
+-      if (result != VK_SUCCESS)
+-         return result;
+-   }
+-
++      result = radv_sparse_buffer_bind_memory(device, submission->buffer_binds + i, batch);
++      if (result != VK_SUCCESS)
++         goto out;
++   }
+    for (uint32_t i = 0; i < submission->image_opaque_bind_count; ++i) {
+-      VkResult result = radv_sparse_image_opaque_bind_memory(device, submission->image_opaque_binds + i);
+-      if (result != VK_SUCCESS)
+-         return result;
+-   }
+-
++      result = radv_sparse_image_opaque_bind_memory(device, submission->image_opaque_binds + i, batch);
++      if (result != VK_SUCCESS)
++         goto out;
++   }
+    for (uint32_t i = 0; i < submission->image_bind_count; ++i) {
+-      VkResult result = radv_sparse_image_bind_memory(device, submission->image_binds + i);
+-      if (result != VK_SUCCESS)
+-         return result;
+-   }
+-
+-   return VK_SUCCESS;
++      result = radv_sparse_image_bind_memory(device, submission->image_binds + i, batch);
++      if (result != VK_SUCCESS)
++         goto out;
++   }
++out:
++   if (ws->sparse_bind_end) {
++      VkResult end_result = ws->sparse_bind_end(ws, batch, result != VK_SUCCESS);
++      if (result == VK_SUCCESS)
++         result = end_result;
++   }
++   /* Nothing is deferred beyond this vk_queue_submit. Existing queue waits,
++    * CS submission and fence/semaphore signaling remain on their normal path. */
++   return result;
+ }
+ 
+ static VkResult
+--- a/src/amd/vulkan/radv_radeon_winsys.h
++++ b/src/amd/vulkan/radv_radeon_winsys.h
+@@ -257,8 +257,12 @@
+    void (*buffer_set_metadata)(struct radeon_winsys *ws, struct radeon_winsys_bo *bo, struct radeon_bo_metadata *md);
+    void (*buffer_get_metadata)(struct radeon_winsys *ws, struct radeon_winsys_bo *bo, struct radeon_bo_metadata *md);
+ 
++   /* Optional per-submission context. End must flush before queue completion. */
++   VkResult (*sparse_bind_begin)(struct radeon_winsys *ws, void **batch);
++   VkResult (*sparse_bind_end)(struct radeon_winsys *ws, void *batch, bool abort);
++
+    VkResult (*buffer_virtual_bind)(struct radeon_winsys *ws, struct radeon_winsys_bo *parent, uint64_t offset,
+-                                   uint64_t size, struct radeon_winsys_bo *bo, uint64_t bo_offset);
++                                   uint64_t size, struct radeon_winsys_bo *bo, uint64_t bo_offset, void *batch);
+ 
+    VkResult (*buffer_make_resident)(struct radeon_winsys *ws, struct radeon_winsys_bo *bo, bool resident);
+ 
+--- a/src/amd/vulkan/winsys/amdgpu/radv_amdgpu_bo.c
++++ b/src/amd/vulkan/winsys/amdgpu/radv_amdgpu_bo.c
+@@ -21,6 +21,7 @@
+ #include "drm-uapi/amdgpu_drm.h"
+ #include <sys/mman.h>
+ #include "ac_linux_drm.h"
++#include "ff7_vm_batch.h"
+ 
+ #include "util/os_drm.h"
+ #include "util/os_time.h"
+@@ -28,11 +29,96 @@
+ #include "util/u_math.h"
+ #include "util/u_memory.h"
+ 
++
++bool
++radv_amdgpu_ff7_init(struct radv_amdgpu_winsys *ws, bool is_virtio)
++{
++   const char *mode = getenv("RADV_FF7_VM_MODE");
++   if (!mode || !*mode || !strcmp(mode, "off"))
++      return true;
++   /* This experiment has only been checked for the supplied NAVI31 hardware. */
++   if (is_virtio || ws->info.pci_id != 0x744c)
++      return true;
++   if (!strcmp(mode, "baseline"))
++      ws->ff7_vm_mode = FF7_VM_BASELINE;
++   else if (!strcmp(mode, "direct"))
++      ws->ff7_vm_mode = FF7_VM_DIRECT_MODE;
++   else if (!strcmp(mode, "batch"))
++      ws->ff7_vm_mode = FF7_VM_BATCH_MODE;
++   else {
++      fprintf(stderr, "FF7_E05: invalid RADV_FF7_VM_MODE.\n");
++      return false;
++   }
++   char marker[16] = {0};
++   FILE *f = fopen("/sys/module/amdgpu/parameters/ff7_vm_batch_replace", "r");
++   if (f) {
++      if (!fgets(marker, sizeof(marker), f))
++         marker[0] = 0;
++      fclose(f);
++   }
++   if (strcmp(marker, "1\n")) {
++      fprintf(stderr, "FF7_E05: expected E04 kernel marker missing; rejecting requested mode.\n");
++      return false;
++   }
++   const char *split = getenv("RADV_FF7_SPLIT_REJECTED");
++   if (split && strcmp(split, "0") && strcmp(split, "1")) {
++      fprintf(stderr, "FF7_E09: RADV_FF7_SPLIT_REJECTED must be 0 or 1.\n");
++      return false;
++   }
++   ws->ff7_split_rejected = split && !strcmp(split, "1");
++   if (ws->ff7_split_rejected && ws->ff7_vm_mode != FF7_VM_BATCH_MODE)
++      return false;
++   fprintf(stderr, "FF7_E09_RADV_v1: pid=%ld mode=%s split_rejected=%u device=0x744c max_entries=16\n",
++           (long)getpid(), mode, ws->ff7_split_rejected);
++   return true;
++}
++
++static int
++radv_amdgpu_ff7_send(void *user, struct drm_amdgpu_gem_va *va)
++{
++   struct radv_amdgpu_winsys *ws = user;
++   return drm_ioctl_write_read(ws->fd, DRM_AMDGPU_GEM_VA, va, sizeof(*va));
++}
++
++static VkResult
++radv_amdgpu_sparse_begin(struct radeon_winsys *rws, void **context)
++{
++   struct radv_amdgpu_winsys *ws = radv_amdgpu_winsys(rws);
++   *context = NULL;
++   if (!ws->ff7_vm_mode)
++      return VK_SUCCESS;
++   struct ff7_vm_batch *batch = calloc(1, sizeof(*batch));
++   if (!batch)
++      return VK_ERROR_OUT_OF_HOST_MEMORY;
++   batch->mode = ws->ff7_vm_mode;
++   batch->split_rejected = ws->ff7_split_rejected;
++   batch->send = radv_amdgpu_ff7_send;
++   batch->user = ws;
++   *context = batch;
++   return VK_SUCCESS;
++}
++
++static VkResult
++radv_amdgpu_sparse_end(struct radeon_winsys *rws, void *context, bool abort)
++{
++   (void)rws;
++   struct ff7_vm_batch *batch = context;
++   if (!batch)
++      return VK_SUCCESS;
++   /* On any earlier error, discard unsent entries and let the caller mark
++    * device lost. Never replay a partly failed submission. */
++   int r = abort ? batch->error : ff7_vm_flush(batch);
++   if (r)
++      fprintf(stderr, "FF7_E05: sparse batch failed (%d), pending=%u; device-lost path.\n", r, batch->count);
++   free(batch);
++   return r ? VK_ERROR_DEVICE_LOST : VK_SUCCESS;
++}
++
+ static void radv_amdgpu_winsys_bo_destroy(struct radeon_winsys *_ws, struct radeon_winsys_bo *_bo);
+ 
+ static int
+ radv_amdgpu_bo_va_op(struct radv_amdgpu_winsys *ws, uint32_t bo_handle, uint64_t offset, uint64_t size, uint64_t addr,
+-                     uint32_t bo_flags, uint64_t internal_flags, uint32_t ops)
++                     uint32_t bo_flags, uint64_t internal_flags, uint32_t ops, struct ff7_vm_batch *batch)
+ {
+    uint64_t flags = internal_flags;
+    int r;
+@@ -48,6 +134,14 @@
+    }
+ 
+    size = align64(size, getpagesize());
++
++   if (batch) {
++      struct drm_amdgpu_gem_va va = {
++         .handle = bo_handle, .operation = ops, .flags = flags,
++         .va_address = addr, .offset_in_bo = offset, .map_size = size,
++      };
++      return ff7_vm_push(batch, &va);
++   }
+ 
+    if (bo_flags & RADEON_FLAG_VM_UPDATE_WAIT) {
+       /* Wait for VM MAP updates when requested instead of delaying the updates at submit time.
+@@ -142,7 +236,7 @@
+ 
+ static int
+ radv_amdgpu_virtual_bo_bind_low_null_prt(struct radv_amdgpu_winsys *ws, struct radv_amdgpu_winsys_bo *bo,
+-                                         uint64_t bo_offset, uint64_t bo_size, uint32_t ops)
++                                         uint64_t bo_offset, uint64_t bo_size, uint32_t ops, struct ff7_vm_batch *batch)
+ {
+    const uint64_t low_va = radv_amdgpu_virtual_bo_get_low_addr(ws, bo);
+    uint64_t offset = 0;
+@@ -154,7 +248,7 @@
+       int r;
+ 
+       r = radv_amdgpu_bo_va_op(ws, radv_amdgpu_winsys_bo(ws->null_prt_bug.bo)->bo_handle, 0, chunk_size,
+-                               low_va + bo_offset + offset, 0, 0, ops);
++                               low_va + bo_offset + offset, 0, 0, ops, batch);
+       if (r)
+          return r;
+ 
+@@ -170,7 +264,7 @@
+ {
+    int r;
+ 
+-   r = radv_amdgpu_bo_va_op(ws, 0, 0, size, bo->base.va, 0, AMDGPU_VM_PAGE_PRT, AMDGPU_VA_OP_MAP);
++   r = radv_amdgpu_bo_va_op(ws, 0, 0, size, bo->base.va, 0, AMDGPU_VM_PAGE_PRT, AMDGPU_VA_OP_MAP, NULL);
+    if (r)
+       return r;
+ 
+@@ -178,7 +272,7 @@
+       /* Bind the "LOW" address space to the zero-initialized BO when it's allocated to emulate
+        * residency.
+        */
+-      r = radv_amdgpu_virtual_bo_bind_low_null_prt(ws, bo, 0, size, AMDGPU_VA_OP_MAP);
++      r = radv_amdgpu_virtual_bo_bind_low_null_prt(ws, bo, 0, size, AMDGPU_VA_OP_MAP, NULL);
+    }
+ 
+    return r;
+@@ -189,7 +283,7 @@
+ {
+    int r;
+ 
+-   r = radv_amdgpu_bo_va_op(ws, 0, 0, bo->base.size, bo->base.va, 0, 0, AMDGPU_VA_OP_CLEAR);
++   r = radv_amdgpu_bo_va_op(ws, 0, 0, bo->base.size, bo->base.va, 0, 0, AMDGPU_VA_OP_CLEAR, NULL);
+    if (r)
+       return r;
+ 
+@@ -197,7 +291,7 @@
+       /* Clear the "LOW" address space mapping when it's released. */
+       const uint64_t low_va = radv_amdgpu_virtual_bo_get_low_addr(ws, bo);
+ 
+-      r = radv_amdgpu_bo_va_op(ws, 0, 0, bo->base.size, low_va, 0, 0, AMDGPU_VA_OP_CLEAR);
++      r = radv_amdgpu_bo_va_op(ws, 0, 0, bo->base.size, low_va, 0, 0, AMDGPU_VA_OP_CLEAR, NULL);
+    }
+ 
+    return r;
+@@ -205,12 +299,12 @@
+ 
+ static int
+ radv_amdgpu_virtual_bo_map(struct radv_amdgpu_winsys *ws, struct radv_amdgpu_winsys_bo *parent, uint64_t offset,
+-                           uint64_t size, struct radv_amdgpu_winsys_bo *bo, uint64_t bo_offset)
++                           uint64_t size, struct radv_amdgpu_winsys_bo *bo, uint64_t bo_offset, struct ff7_vm_batch *batch)
+ {
+    int r;
+ 
+    r = radv_amdgpu_bo_va_op(ws, bo->bo_handle, bo_offset, size, parent->base.va + offset,
+-                            bo->flags & RADEON_FLAG_GL2_BYPASS, 0, AMDGPU_VA_OP_REPLACE);
++                            bo->flags & RADEON_FLAG_GL2_BYPASS, 0, AMDGPU_VA_OP_REPLACE, batch);
+    if (r)
+       return r;
+ 
+@@ -219,7 +313,7 @@
+       const uint64_t low_va = radv_amdgpu_virtual_bo_get_low_addr(ws, parent);
+ 
+       r = radv_amdgpu_bo_va_op(ws, bo->bo_handle, bo_offset, size, low_va + offset, bo->flags & RADEON_FLAG_GL2_BYPASS,
+-                               0, AMDGPU_VA_OP_REPLACE);
++                               0, AMDGPU_VA_OP_REPLACE, batch);
+       if (r)
+          return r;
+    }
+@@ -230,11 +324,11 @@
+ 
+ static int
+ radv_amdgpu_virtual_bo_unmap(struct radv_amdgpu_winsys *ws, struct radv_amdgpu_winsys_bo *parent, uint64_t offset,
+-                             uint64_t size)
++                             uint64_t size, struct ff7_vm_batch *batch)
+ {
+    int r;
+ 
+-   r = radv_amdgpu_bo_va_op(ws, 0, 0, size, parent->base.va + offset, 0, AMDGPU_VM_PAGE_PRT, AMDGPU_VA_OP_REPLACE);
++   r = radv_amdgpu_bo_va_op(ws, 0, 0, size, parent->base.va + offset, 0, AMDGPU_VM_PAGE_PRT, AMDGPU_VA_OP_REPLACE, batch);
+    if (r)
+       return r;
+ 
+@@ -242,7 +336,7 @@
+       /* Re-bind the "LOW" address space to the zero-initialized BO when it's unmapped to emulate
+        * residency.
+        */
+-      r = radv_amdgpu_virtual_bo_bind_low_null_prt(ws, parent, offset, size, AMDGPU_VA_OP_REPLACE);
++      r = radv_amdgpu_virtual_bo_bind_low_null_prt(ws, parent, offset, size, AMDGPU_VA_OP_REPLACE, batch);
+       if (r)
+          return r;
+    }
+@@ -253,12 +347,14 @@
+ 
+ static VkResult
+ radv_amdgpu_winsys_bo_virtual_bind(struct radeon_winsys *_ws, struct radeon_winsys_bo *_parent, uint64_t offset,
+-                                   uint64_t size, struct radeon_winsys_bo *_bo, uint64_t bo_offset)
++                                   uint64_t size, struct radeon_winsys_bo *_bo, uint64_t bo_offset, void *context)
+ {
+    struct radv_amdgpu_winsys *ws = radv_amdgpu_winsys(_ws);
+    struct radv_amdgpu_winsys_bo *parent = (struct radv_amdgpu_winsys_bo *)_parent;
+    struct radv_amdgpu_winsys_bo *bo = (struct radv_amdgpu_winsys_bo *)_bo;
+    int r;
++
++   struct ff7_vm_batch *batch = context;
+ 
+    assert(parent->base.is_virtual);
+    assert(!bo || !bo->base.is_virtual);
+@@ -267,9 +363,9 @@
+     * will first unmap all existing VA that overlap the requested range and then map.
+     */
+    if (bo) {
+-      r = radv_amdgpu_virtual_bo_map(ws, parent, offset, size, bo, bo_offset);
++      r = radv_amdgpu_virtual_bo_map(ws, parent, offset, size, bo, bo_offset, batch);
+    } else {
+-      r = radv_amdgpu_virtual_bo_unmap(ws, parent, offset, size);
++      r = radv_amdgpu_virtual_bo_unmap(ws, parent, offset, size, batch);
+    }
+ 
+    if (r) {
+@@ -384,7 +480,7 @@
+       radv_amdgpu_global_bo_list_del(ws, bo);
+ 
+    const uint64_t va_size = radv_amdgpu_bo_va_size(bo->base.size, bo->flags);
+-   radv_amdgpu_bo_va_op(ws, bo->bo_handle, 0, va_size, bo->base.va, 0, 0, AMDGPU_VA_OP_UNMAP);
++   radv_amdgpu_bo_va_op(ws, bo->bo_handle, 0, va_size, bo->base.va, 0, 0, AMDGPU_VA_OP_UNMAP, NULL);
+    ac_drm_bo_free(ws->dev, bo->bo);
+ 
+    if (bo->base.initial_domain & RADEON_DOMAIN_VRAM) {
+@@ -644,7 +740,7 @@
+    r = ac_drm_bo_export(ws->dev, buf_handle, amdgpu_bo_handle_type_kms, &kms_handle);
+    assert(!r);
+ 
+-   r = radv_amdgpu_bo_va_op(ws, kms_handle, 0, size, va, flags, 0, AMDGPU_VA_OP_MAP);
++   r = radv_amdgpu_bo_va_op(ws, kms_handle, 0, size, va, flags, 0, AMDGPU_VA_OP_MAP, NULL);
+    if (r) {
+       result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+       goto error_va_map;
+@@ -653,7 +749,7 @@
+    if (flags & RADEON_FLAG_VM_PAD_1PAGE) {
+       /* Map the first page of the same BO as read-only after the BO itself. */
+       r = radv_amdgpu_bo_va_op(ws, kms_handle, 0, 4096, va + align64(size, 4096), flags | RADEON_FLAG_READ_ONLY, 0,
+-                               AMDGPU_VA_OP_MAP);
++                               AMDGPU_VA_OP_MAP, NULL);
+       if (r) {
+          result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+          goto error_va_map;
+@@ -837,7 +933,7 @@
+    ASSERTED int r = ac_drm_bo_export(ws->dev, buf_handle, amdgpu_bo_handle_type_kms, &kms_handle);
+    assert(!r);
+ 
+-   if (radv_amdgpu_bo_va_op(ws, kms_handle, 0, size, va, 0, 0, AMDGPU_VA_OP_MAP)) {
++   if (radv_amdgpu_bo_va_op(ws, kms_handle, 0, size, va, 0, 0, AMDGPU_VA_OP_MAP, NULL)) {
+       result = VK_ERROR_UNKNOWN;
+       goto error_va_map;
+    }
+@@ -924,7 +1020,7 @@
+       goto error_query;
+    }
+ 
+-   r = radv_amdgpu_bo_va_op(ws, kms_handle, 0, result.alloc_size, va, 0, 0, AMDGPU_VA_OP_MAP);
++   r = radv_amdgpu_bo_va_op(ws, kms_handle, 0, result.alloc_size, va, 0, 0, AMDGPU_VA_OP_MAP, NULL);
+    if (r) {
+       vk_result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+       goto error_va_map;
+@@ -1321,6 +1417,8 @@
+    ws->base.buffer_set_metadata = radv_amdgpu_winsys_bo_set_metadata;
+    ws->base.buffer_get_metadata = radv_amdgpu_winsys_bo_get_metadata;
+    ws->base.buffer_virtual_bind = radv_amdgpu_winsys_bo_virtual_bind;
++   ws->base.sparse_bind_begin = radv_amdgpu_sparse_begin;
++   ws->base.sparse_bind_end = radv_amdgpu_sparse_end;
+    ws->base.buffer_get_flags_from_fd = radv_amdgpu_bo_get_flags_from_fd;
+    ws->base.buffer_make_resident = radv_amdgpu_winsys_bo_make_resident;
+    ws->base.dump_bo_ranges = radv_amdgpu_dump_bo_ranges;
+--- a/src/amd/vulkan/winsys/amdgpu/radv_amdgpu_winsys.c
++++ b/src/amd/vulkan/winsys/amdgpu/radv_amdgpu_winsys.c
+@@ -250,6 +250,10 @@
+    }
+ 
+    memcpy(&ws->info, info, sizeof(ws->info));
++   if (!radv_amdgpu_ff7_init(ws, is_virtio)) {
++      result = VK_ERROR_INITIALIZATION_FAILED;
++      goto winsys_fail;
++   }
+ 
+    ws->chain_ib = !(debug_flags & RADV_DEBUG_NO_IB_CHAINING);
+    ws->debug_all_bos = !!(debug_flags & RADV_DEBUG_ALL_BOS);
+--- a/src/amd/vulkan/winsys/amdgpu/radv_amdgpu_winsys.h
++++ b/src/amd/vulkan/winsys/amdgpu/radv_amdgpu_winsys.h
+@@ -37,6 +37,9 @@
+    uint32_t refcount;
+ };
+ 
++struct radv_amdgpu_winsys;
++bool radv_amdgpu_ff7_init(struct radv_amdgpu_winsys *ws, bool is_virtio);
++
+ struct radv_amdgpu_winsys {
+    struct radeon_winsys base;
+    ac_drm_device *dev;
+@@ -52,6 +55,8 @@
+    bool zero_all_vram_allocs;
+    bool debug_vm;
+    uint64_t perftest;
++   unsigned ff7_split_rejected;
++   unsigned ff7_vm_mode; /* Private E05 opt-in; zero preserves ordinary behavior. */
+ 
+    struct radv_amdgpu_alloc_tracker *alloc_tracker;
+ 
+--- a/src/amd/vulkan/winsys/amdgpu/ff7_vm_batch.h
++++ b/src/amd/vulkan/winsys/amdgpu/ff7_vm_batch.h
+@@ -0,0 +1,144 @@
++/* SPDX-License-Identifier: MIT
++ * Private E09 experiment: one context per RADV sparse submission.
++ * The caller must finish/abort before reporting submission completion.
++ * No global batching state, cross-submission deferral or added GPU waits.
++ */
++#ifndef FF7_VM_BATCH_H
++#define FF7_VM_BATCH_H
++#include <errno.h>
++#include <stdbool.h>
++#include <stdint.h>
++#include "drm-uapi/amdgpu_drm.h"
++
++#define FF7_VM_BATCH_OP 0xf704u
++#define FF7_VM_BATCH_MAX 16u
++#define FF7_VM_EXPLICIT (1u << 10)
++#define FF7_VM_ACCOUNT (1u << 11)
++#define FF7_VM_DIRECT (1u << 12)
++enum ff7_vm_mode { FF7_VM_OFF, FF7_VM_BASELINE, FF7_VM_DIRECT_MODE, FF7_VM_BATCH_MODE };
++struct ff7_vm_counts {
++   uint64_t calls, batch_attempts, batches, entries, scalar, fallback, unsupported, splits, errors;
++};
++typedef int (*ff7_vm_send)(void *user, struct drm_amdgpu_gem_va *va);
++struct ff7_vm_batch {
++   enum ff7_vm_mode mode;
++   unsigned count;
++   bool split_rejected;
++   int error;
++   ff7_vm_send send;
++   void *user;
++   struct ff7_vm_counts stats;
++   struct drm_amdgpu_gem_va entries[FF7_VM_BATCH_MAX];
++};
++_Static_assert(sizeof(struct drm_amdgpu_gem_va)==64, "E04 kernel GEM_VA ABI");
++
++static inline int
++ff7_vm_error(struct ff7_vm_batch *b, int r)
++{
++   if (!b->error)
++      ++b->stats.errors;
++   b->error = r;
++   return r;
++}
++
++static inline int
++ff7_vm_scalar(struct ff7_vm_batch *b, const struct drm_amdgpu_gem_va *entry)
++{
++   struct drm_amdgpu_gem_va va = *entry;
++   va.flags |= FF7_VM_ACCOUNT;
++   if (b->mode != FF7_VM_BASELINE)
++      va.flags |= FF7_VM_DIRECT;
++   ++b->stats.scalar;
++   int r = b->send(b->user, &va);
++   return r ? ff7_vm_error(b, r) : 0;
++}
++
++/* Retry only EOPNOTSUPP: the private kernel operation guarantees no
++ * mutation on that result. Process contiguous left then right portions in
++ * original order; no reordering, cross-submission deferral, or GPU waits.
++ * Stop subdividing at two entries. A rejected 16-entry vector therefore
++ * uses at most 15 batch attempts and 16 scalar calls, recursion depth four.
++ * Every other error is terminal, including after an earlier portion commits.
++ */
++static inline int
++ff7_vm_send_entries(struct ff7_vm_batch *b,
++                    const struct drm_amdgpu_gem_va *entries, unsigned count)
++{
++   struct drm_amdgpu_gem_va header = {
++      .handle = entries[0].handle, .operation = FF7_VM_BATCH_OP,
++      .va_address = (uint64_t)(uintptr_t)entries, .offset_in_bo = count,
++   };
++   ++b->stats.batch_attempts;
++   int r = b->send(b->user, &header);
++   if (r == -EOPNOTSUPP) {
++      ++b->stats.unsupported;
++      if (b->split_rejected && count > 2) {
++         unsigned left = count / 2;
++         ++b->stats.splits;
++         r = ff7_vm_send_entries(b, entries, left);
++         return r ? r : ff7_vm_send_entries(b, entries + left, count - left);
++      }
++      b->stats.fallback += count;
++      for (unsigned i = 0; i < count; ++i) {
++         r = ff7_vm_scalar(b, &entries[i]);
++         if (r)
++            return r;
++      }
++   } else if (r) {
++      return ff7_vm_error(b, r);
++   } else {
++      ++b->stats.batches;
++      b->stats.entries += count;
++   }
++   return 0;
++}
++
++static inline int
++ff7_vm_flush(struct ff7_vm_batch *b)
++{
++   if (b->error)
++      return b->error;
++   if (!b->count)
++      return 0;
++   int r = ff7_vm_send_entries(b, b->entries, b->count);
++   if (!r)
++      b->count = 0;
++   return r;
++}
++
++static inline int
++ff7_vm_push(struct ff7_vm_batch *b, const struct drm_amdgpu_gem_va *va)
++{
++   if (b->error)
++      return b->error;
++   if (b->mode < FF7_VM_BASELINE || b->mode > FF7_VM_BATCH_MODE || !b->send ||
++       va->operation != AMDGPU_VA_OP_REPLACE ||
++       (va->flags & (FF7_VM_EXPLICIT | FF7_VM_ACCOUNT | FF7_VM_DIRECT | AMDGPU_VM_DELAY_UPDATE)) ||
++       va->_pad || va->vm_timeline_point || va->vm_timeline_syncobj_out ||
++       va->num_syncobj_handles || va->input_fence_syncobj_handles)
++      return ff7_vm_error(b, -EINVAL);
++   ++b->stats.calls;
++   bool eligible = va->handle && !(va->flags & AMDGPU_VM_PAGE_PRT) &&
++                   va->map_size == 65536 && !(va->va_address & 65535) &&
++                   !(va->offset_in_bo & 65535);
++   if (b->mode != FF7_VM_BATCH_MODE || !eligible) {
++      int r = ff7_vm_flush(b);
++      if (r)
++         return r;
++      if (b->mode == FF7_VM_BATCH_MODE)
++         ++b->stats.fallback;
++      return ff7_vm_scalar(b, va);
++   }
++   bool flush = b->count && (b->entries[0].handle != va->handle ||
++                             b->entries[0].flags != va->flags);
++   for (unsigned i = 0; i < b->count; ++i)
++      flush |= b->entries[i].va_address == va->va_address;
++   if (flush) {
++      int r = ff7_vm_flush(b);
++      if (r)
++         return r;
++   }
++   b->entries[b->count++] = *va;
++   return b->count == FF7_VM_BATCH_MAX ? ff7_vm_flush(b) : 0;
++}
++#endif

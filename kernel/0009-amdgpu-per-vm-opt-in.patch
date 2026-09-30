@@ -1,0 +1,292 @@
+Subject: [PATCH] amdgpu: negotiate the accepted sparse profile per VM
+
+Source packaging of the accepted E28 profile. Private ABI, default off.
+Retain mapping, split-guard and lifetime behavior; replace global selection.
+
+diff --git a/drivers/gpu/drm/amd/amdgpu/amdgpu_gem.c b/drivers/gpu/drm/amd/amdgpu/amdgpu_gem.c
+index c531120..28cccc9 100644
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_gem.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_gem.c
+@@ -844,30 +844,7 @@ amdgpu_gem_va_update_vm(struct amdgpu_vm_update_ctx *ctx,
+ 	return dma_fence_get(ctx->vm->last_update);
+ }
+ 
+-/* E07 changes only the private E04 operation. Read once per vector. */
+-static unsigned int ff7_vm_cross_bo = 1;
+-static unsigned int ff7_vm_cross_bo_api = 1;
+-/* E12: userspace has honored the sparse submission waits before this ioctl.
+- * E01 still downgrades unsafe BO lifetimes to ordinary implicit sync. */
+-static unsigned int ff7_vm_batch_explicit_api = 1;
+-module_param_named(ff7_vm_batch_explicit_api, ff7_vm_batch_explicit_api, uint, 0444);
+-static int ff7_vm_cross_bo_set(const char *val, const struct kernel_param *kp)
+-{
+-	unsigned int mode;
+-	int r = kstrtouint(val, 0, &mode);
+-
+-	if (r || mode > 1)
+-		return r ?: -EINVAL;
+-	WRITE_ONCE(*(unsigned int *)kp->arg, mode);
+-	return 0;
+-}
+-static const struct kernel_param_ops ff7_vm_cross_bo_ops = {
+-	.set = ff7_vm_cross_bo_set,
+-	.get = param_get_uint,
+-};
+-module_param_cb(ff7_vm_cross_bo, &ff7_vm_cross_bo_ops, &ff7_vm_cross_bo, 0644);
+-module_param_named(ff7_vm_cross_bo_api, ff7_vm_cross_bo_api, uint, 0444);
+-
++/* Cross-BO eligibility belongs to the negotiated per-VM profile. */
+ /* First unsupported condition only. Entries after that are not inspected. */
+ enum ff7_e07_reason {
+ 	FF7_E07_ACCEPTED, FF7_E07_OTHER_BO, FF7_E07_SHAPE, FF7_E07_SOURCE,
+@@ -930,7 +907,7 @@ static int amdgpu_gem_ff7_batch_ioctl(struct drm_device *dev,
+ 	struct drm_exec exec;
+ 	unsigned int count, i, j, cross_entries = 0;
+ 	enum ff7_e07_reason reason = FF7_E07_ACCEPTED;
+-	bool cross_bo = READ_ONCE(ff7_vm_cross_bo);
++	bool cross_bo = READ_ONCE(vm->sparse_vm_abi) == 1;
+ 	u64 end, vm_size;
+ 	int r = 0;
+ 
+@@ -1099,6 +1076,13 @@ int amdgpu_gem_va_ioctl(struct drm_device *dev, void *data,
+ 	uint64_t vm_size, tmp;
+ 	int r = 0;
+ 
++	/* Legacy experiment flags cannot opt in implicitly. */
++	if ((args->operation == AMDGPU_VA_OP_FF7_BATCH_REPLACE ||
++	     args->flags & (AMDGPU_VM_EXPLICIT_SYNC | AMDGPU_VM_FF7_ACCOUNT |
++	                    AMDGPU_VM_FF7_DIRECT_REPLACE)) &&
++	    READ_ONCE(fpriv->vm.sparse_vm_abi) != 1)
++		return -EOPNOTSUPP;
++
+ 	if (args->operation == AMDGPU_VA_OP_FF7_BATCH_REPLACE)
+ 		return amdgpu_gem_ff7_batch_ioctl(dev, args, filp);
+ 
+diff --git a/drivers/gpu/drm/amd/amdgpu/amdgpu_vm.c b/drivers/gpu/drm/amd/amdgpu/amdgpu_vm.c
+index 4dd7875..2168e4c 100644
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_vm.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_vm.c
+@@ -45,33 +45,7 @@
+ #include "amdgpu_res_cursor.h"
+ #include "kfd_svm.h"
+ 
+-/* Private FF7 E01 experiment; opt-in remains per VA operation. */
+-/* E27: latch a page-table policy only for the private E03/E04 ABI.
+- * The switch affects the first private operation in each VM. A live VM never
+- * switches back or changes policy when the module parameter is rewritten.
+- * No synchronization, lifetime, migration or TLB rule is relaxed here.
+- */
+-static unsigned int ff7_vm_leaf_only;
+-static unsigned int ff7_vm_leaf_only_api = 1;
+-module_param_named(ff7_vm_leaf_only_api, ff7_vm_leaf_only_api, uint, 0444);
+-static int ff7_vm_leaf_only_set(const char *val, const struct kernel_param *kp)
+-{
+-	unsigned int v;
+-	int r = kstrtouint(val, 0, &v);
+-
+-	if (r || v > 1)
+-		return -EINVAL;
+-	WRITE_ONCE(*(unsigned int *)kp->arg, v);
+-	return 0;
+-}
+-static const struct kernel_param_ops ff7_vm_leaf_only_ops = {
+-	.set = ff7_vm_leaf_only_set,
+-	.get = param_get_uint,
+-};
+-module_param_cb(ff7_vm_leaf_only, &ff7_vm_leaf_only_ops,
+-		&ff7_vm_leaf_only, 0644);
+-MODULE_PARM_DESC(ff7_vm_leaf_only,
+-	"FF7 E27 opt-in PTB policy, latched at first private operation per VM");
++/* Accepted sparse-VM policy. Selection is per DRM file, never global. */
+ static atomic64_t ff7_e27_control_vms, ff7_e27_leaf_vms;
+ static atomic64_t ff7_e27_fragments, ff7_e27_capped;
+ static atomic64_t ff7_e27_leaf_writes, ff7_e27_upper_writes;
+@@ -91,22 +65,28 @@ static const struct kernel_param_ops ff7_vm_e27_stats_ops = {
+ };
+ module_param_cb(ff7_vm_e27_stats, &ff7_vm_e27_stats_ops, NULL, 0444);
+ 
++static bool amdgpu_vm_sparse_supported(struct amdgpu_device *adev,
++				       struct amdgpu_vm *vm)
++{
++	/* Keep the discrete-VRAM and SDMA path; no PCI model allowlist. */
++	return !(adev->flags & AMD_IS_APU) && !amdgpu_sriov_vf(adev) &&
++		!adev->debug_vm && !vm->is_compute_context &&
++		vm->update_funcs == &amdgpu_vm_sdma_funcs &&
++		adev->vm_manager.block_size > 4 &&
++		/* One aligned 64 KiB range must fit in one PTE fragment. */
++		(adev->asic_type >= CHIP_VEGA10 ||
++		 adev->vm_manager.fragment_size >= 4);
++}
++
+ void amdgpu_vm_ff7_latch_leaf_policy(struct amdgpu_device *adev,
+ 				    struct amdgpu_vm *vm)
+ {
+ 	dma_resv_assert_held(vm->root.bo->tbo.base.resv);
+-	if (vm->ff7_leaf_policy || adev->debug_vm ||
+-	    adev->pdev->device != 0x744c ||
+-	    vm->update_funcs != &amdgpu_vm_sdma_funcs ||
+-	    adev->vm_manager.block_size <= 4 || vm->is_compute_context)
++	if (vm->ff7_leaf_policy || READ_ONCE(vm->sparse_vm_abi) != 1 ||
++	    !amdgpu_vm_sparse_supported(adev, vm))
+ 		return;
+-	if (READ_ONCE(ff7_vm_leaf_only)) {
+-		WRITE_ONCE(vm->ff7_leaf_policy, 2);
+-		atomic64_inc(&ff7_e27_leaf_vms);
+-	} else {
+-		WRITE_ONCE(vm->ff7_leaf_policy, 1);
+-		atomic64_inc(&ff7_e27_control_vms);
+-	}
++	WRITE_ONCE(vm->ff7_leaf_policy, 2);
++	atomic64_inc(&ff7_e27_leaf_vms);
+ }
+ 
+ unsigned int amdgpu_vm_ff7_fragment_limit(struct amdgpu_vm_update_params *p,
+@@ -192,32 +172,7 @@ static const struct kernel_param_ops ff7_vm_e03_stats_ops = {
+ };
+ module_param_cb(ff7_vm_e03_stats, &ff7_vm_e03_stats_ops, NULL, 0444);
+ 
+-/* E13: retain E03 direct replacement for eligible explicit scalar updates.
+- * Default off: the baseline remains the already tested E12 explicit path.
+- */
+-static unsigned int ff7_vm_explicit_direct;
+-static unsigned int ff7_vm_explicit_direct_api = 1;
+-module_param_named(ff7_vm_explicit_direct_api, ff7_vm_explicit_direct_api,
+-                   uint, 0444);
+-static int ff7_vm_explicit_direct_set(const char *val,
+-                                     const struct kernel_param *kp)
+-{
+-	unsigned int mode;
+-	int r = kstrtouint(val, 0, &mode);
+-
+-	if (r || mode > 1)
+-		return r ? r : -EINVAL;
+-	WRITE_ONCE(*(unsigned int *)kp->arg, mode);
+-	return 0;
+-}
+-static const struct kernel_param_ops ff7_vm_explicit_direct_ops = {
+-	.set = ff7_vm_explicit_direct_set,
+-	.get = param_get_uint,
+-};
+-module_param_cb(ff7_vm_explicit_direct, &ff7_vm_explicit_direct_ops,
+-                &ff7_vm_explicit_direct, 0644);
+-MODULE_PARM_DESC(ff7_vm_explicit_direct,
+-                 "FF7 E13 explicit scalar direct replacement (0 baseline, 1 direct)");
++/* Eligible explicit scalar replacement; the split guard remains mandatory. */
+ static atomic64_t ff7_e13_candidates, ff7_e13_enabled, ff7_e13_direct;
+ static atomic64_t ff7_e13_fallback, ff7_e13_eliminated, ff7_e13_errors;
+ static int ff7_vm_e13_stats_get(char *buffer, const struct kernel_param *kp)
+@@ -2027,7 +1982,7 @@ int amdgpu_vm_ff7_replace(struct amdgpu_vm_update_ctx *ctx,
+ 	bool direct = ctx->ff7_e03_mode == 2;
+ 	bool explicit_candidate = direct && ctx->explicit_sync_unmap;
+ 	bool explicit_direct = explicit_candidate &&
+-		READ_ONCE(ff7_vm_explicit_direct) == 1;
++		READ_ONCE(ctx->vm->sparse_vm_abi) == 1;
+ 	int r;
+ 
+ 	if (ctx->ff7_e03_mode)
+@@ -3202,6 +3157,7 @@ int amdgpu_vm_init(struct amdgpu_device *adev, struct amdgpu_vm *vm,
+ 	int r, i;
+ 
+ 	vm->ff7_leaf_policy = 0;
++	vm->sparse_vm_abi = 0;
+ 	vm->va = RB_ROOT_CACHED;
+ 	for (i = 0; i < AMDGPU_MAX_VMHUBS; i++)
+ 		vm->reserved_vmid[i] = NULL;
+@@ -3331,6 +3287,12 @@ int amdgpu_vm_make_compute(struct amdgpu_device *adev, struct amdgpu_vm *vm)
+ 	if (r)
+ 		return r;
+ 
++	/* The sparse profile is for graphics VMs and cannot change updater. */
++	if (READ_ONCE(vm->sparse_vm_abi)) {
++		r = -EBUSY;
++		goto unreserve_bo;
++	}
++
+ 	/* Update VM state */
+ 	vm->use_cpu_for_update = !!(adev->vm_manager.vm_update_mode &
+ 				    AMDGPU_VM_USE_CPU_FOR_COMPUTE);
+@@ -3517,6 +3479,36 @@ void amdgpu_vm_manager_fini(struct amdgpu_device *adev)
+ 	amdgpu_pasid_mgr_cleanup();
+ }
+ 
++/* Select only the accepted profile; no arbitrary synchronization switches.
++ * Hold the root reservation against a concurrent compute-VM conversion.
++ */
++static int amdgpu_vm_sparse_ioctl(struct amdgpu_device *adev,
++				 struct amdgpu_vm *vm,
++				 union drm_amdgpu_vm *args)
++{
++	bool enable = args->in.op == AMDGPU_VM_OP_SPARSE_ENABLE;
++	int r;
++
++	if (args->in.flags != (enable ? 1u : 0u))
++		return -EINVAL;
++
++	r = amdgpu_bo_reserve(vm->root.bo, true);
++	if (r)
++		return r;
++
++	if (!amdgpu_vm_sparse_supported(adev, vm)) {
++		r = -EOPNOTSUPP;
++		goto out;
++	}
++
++	if (enable)
++		WRITE_ONCE(vm->sparse_vm_abi, 1);
++	args->out.flags = AMDGPU_VM_SPARSE_V1_TOKEN;
++out:
++	amdgpu_bo_unreserve(vm->root.bo);
++	return r;
++}
++
+ /**
+  * amdgpu_vm_ioctl - Manages VMID reservation for vm hubs.
+  *
+@@ -3534,7 +3526,11 @@ int amdgpu_vm_ioctl(struct drm_device *dev, void *data, struct drm_file *filp)
+ 	struct amdgpu_fpriv *fpriv = filp->driver_priv;
+ 	struct amdgpu_vm *vm = &fpriv->vm;
+ 
+-	/* No valid flags defined yet */
++	if (args->in.op == AMDGPU_VM_OP_SPARSE_QUERY ||
++	    args->in.op == AMDGPU_VM_OP_SPARSE_ENABLE)
++		return amdgpu_vm_sparse_ioctl(adev, vm, args);
++
++	/* No flags for the upstream VMID reservation operations. */
+ 	if (args->in.flags)
+ 		return -EINVAL;
+ 
+diff --git a/drivers/gpu/drm/amd/amdgpu/amdgpu_vm.h b/drivers/gpu/drm/amd/amdgpu/amdgpu_vm.h
+index 2c1243a..27175d4 100644
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_vm.h
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_vm.h
+@@ -460,6 +460,7 @@ struct amdgpu_vm {
+ 
+ 	/* E27: 0 unselected, 1 control, 2 leaf-only; latched under root reservation. */
+ 	u8 ff7_leaf_policy;
++	u32 sparse_vm_abi; /* zero unless enabled through the private VM ioctl */
+ 
+ 	/* Flag to indicate if VM tables are updated by CPU or GPU (SDMA) */
+ 	bool					use_cpu_for_update;
+diff --git a/include/uapi/drm/amdgpu_drm.h b/include/uapi/drm/amdgpu_drm.h
+index 6ffc81d..252b6d7 100644
+--- a/include/uapi/drm/amdgpu_drm.h
++++ b/include/uapi/drm/amdgpu_drm.h
+@@ -588,6 +588,18 @@ struct drm_amdgpu_userq_wait {
+ #define AMDGPU_VM_OP_RESERVE_VMID	1
+ #define AMDGPU_VM_OP_UNRESERVE_VMID	2
+ 
++
++/* Private sparse-VM protocol v1. Not an upstream Linux UAPI assignment.
++ * QUERY: in.flags = 0, no state change.
++ * ENABLE: in.flags = 1, enable the complete profile for this DRM file's VM.
++ * Both return AMDGPU_VM_SPARSE_V1_TOKEN in out.flags on success. Unsupported
++ * hardware/update mode returns EOPNOTSUPP. Unknown version returns EINVAL.
++ * Enable is idempotent and persists until the VM is destroyed; no live reset.
++ */
++#define AMDGPU_VM_OP_SPARSE_QUERY  0x53560001u
++#define AMDGPU_VM_OP_SPARSE_ENABLE 0x53560002u
++#define AMDGPU_VM_SPARSE_V1_TOKEN  0x53564d3100000001ULL
++
+ struct drm_amdgpu_vm_in {
+ 	/** AMDGPU_VM_OP_* */
+ 	__u32	op;

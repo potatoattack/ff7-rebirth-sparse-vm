@@ -1,0 +1,288 @@
+--- a/src/amd/vulkan/radv_radeon_winsys.h
++++ b/src/amd/vulkan/radv_radeon_winsys.h
+@@ -171,6 +171,10 @@
+    bool use_global_list;
+    bool gfx12_allow_dcc;
+    bool is_virtual; /* sparse buffers */
++   /* E16: only API-owned allocations whose submitted uses must finish before
++    * destruction. Internal/WSI allocations retain implicit synchronization.
++    */
++   bool ff7_api_owned;
+    enum radeon_bo_domain initial_domain;
+    uint64_t obj_id;
+ };
+--- a/src/amd/vulkan/radv_buffer.c
++++ b/src/amd/vulkan/radv_buffer.c
+@@ -106,6 +106,7 @@
+          return vk_error(device, result);
+       }
+ 
++      buffer->bo->ff7_api_owned = !is_internal;
+       buffer->vk.device_address = radv_buffer_get_va(buffer->bo);
+    }
+ 
+--- a/src/amd/vulkan/radv_image.c
++++ b/src/amd/vulkan/radv_image.c
+@@ -1522,6 +1522,10 @@
+          return vk_error(device, result);
+       }
+ 
++      /* The virtual BO's allocator uses is_internal=true for other reasons;
++       * resource lifetime comes from the image's actual API ownership.
++       */
++      image->bindings[0].bo->ff7_api_owned = !is_internal;
+       image->bindings[0].addr = radv_buffer_get_va(image->bindings[0].bo);
+    }
+ 
+--- a/src/amd/vulkan/radv_device_memory.c
++++ b/src/amd/vulkan/radv_device_memory.c
+@@ -304,6 +304,10 @@
+       radv_va_validation_update_page(device, radv_buffer_get_va(mem->bo), alloc_size, true);
+    }
+ 
++   /* Imported/shared memory is also excluded later by the is_local check. */
++   mem->bo->ff7_api_owned = !is_internal && !wsi_info && !import_info && !host_ptr_info &&
++                           !ahb_import_info && !(export_info && export_info->handleTypes);
++
+    if (!wsi_info) {
+       result = device->ws->buffer_make_resident(device->ws, mem->bo, true);
+       if (result != VK_SUCCESS)
+--- a/src/amd/vulkan/tools/radv_debug.c
++++ b/src/amd/vulkan/tools/radv_debug.c
+@@ -7,6 +7,7 @@
+ #include "radv_debug.h"
+ #include "radv_buffer.h"
+ #include "radv_device.h"
++#include "radv_device_memory.h"
+ #include "radv_entrypoints.h"
+ #include "vk_common_entrypoints.h"
+ 
+@@ -77,6 +78,10 @@
+    if (result != VK_SUCCESS)
+       goto fail;
+ 
++   /* Internal tracing/debug helpers call public allocation entrypoints. */
++   VK_FROM_HANDLE(radv_device_memory, memory, buffer->memory);
++   memory->bo->ff7_api_owned = false;
++
+    VkBindBufferMemoryInfo bind_info = {
+       .sType = VK_STRUCTURE_TYPE_BIND_BUFFER_MEMORY_INFO,
+       .buffer = buffer->buffer,
+--- a/src/amd/vulkan/winsys/amdgpu/radv_amdgpu_winsys.h
++++ b/src/amd/vulkan/winsys/amdgpu/radv_amdgpu_winsys.h
+@@ -39,6 +39,7 @@
+ 
+ struct radv_amdgpu_winsys;
+ bool radv_amdgpu_ff7_init(struct radv_amdgpu_winsys *ws, bool is_virtio);
++void radv_amdgpu_ff7_destroy_finish(struct radv_amdgpu_winsys *ws);
+ 
+ struct radv_amdgpu_winsys {
+    struct radeon_winsys base;
+@@ -57,6 +58,8 @@
+    uint64_t perftest;
+    unsigned ff7_split_rejected;
+    unsigned ff7_vm_mode; /* Private E05 opt-in; zero preserves ordinary behavior. */
++   bool ff7_explicit_destroy;
++   uint64_t *ff7_destroy_stats; /* optional private 4 KiB MAP_SHARED counters */
+ 
+    struct radv_amdgpu_alloc_tracker *alloc_tracker;
+ 
+--- a/src/amd/vulkan/winsys/amdgpu/radv_amdgpu_winsys.c
++++ b/src/amd/vulkan/winsys/amdgpu/radv_amdgpu_winsys.c
+@@ -184,6 +184,7 @@
+ 
+    radv_amdgpu_alloc_tracker_release(ws->alloc_tracker);
+ 
++   radv_amdgpu_ff7_destroy_finish(ws);
+    ac_drm_device_deinitialize(ws->dev);
+    FREE(rws);
+ }
+@@ -297,6 +298,7 @@
+    return result;
+ 
+ winsys_fail:
++   radv_amdgpu_ff7_destroy_finish(ws);
+    if (ws->alloc_tracker)
+       radv_amdgpu_alloc_tracker_release(ws->alloc_tracker);
+    free(ws);
+--- a/src/amd/vulkan/winsys/amdgpu/radv_amdgpu_bo.c
++++ b/src/amd/vulkan/winsys/amdgpu/radv_amdgpu_bo.c
+@@ -15,6 +15,7 @@
+ #include "radv_amdgpu_bo.h"
+ 
+ #include <inttypes.h>
++#include <fcntl.h>
+ #include <pthread.h>
+ #include <unistd.h>
+ #include <xf86drm.h>
+@@ -29,6 +30,78 @@
+ #include "util/u_math.h"
+ #include "util/u_memory.h"
+ 
++
++/* E16 diagnostic counters add no per-destruction file I/O or GPU waits.
++ * Layout: magic/version/pid/mode, candidate physical/virtual/other,
++ * completed explicit physical/virtual, completed implicit, errors, reserved.
++ */
++static bool
++radv_amdgpu_ff7_destroy_init(struct radv_amdgpu_winsys *ws)
++{
++   const char *mode = getenv("RADV_FF7_EXPLICIT_DESTROY");
++   const char *dir = getenv("RADV_FF7_DESTROY_STATS_DIR");
++   if (!mode && !dir)
++      return true;
++   if (!mode || (strcmp(mode, "0") && strcmp(mode, "1")) || !ws->base.ff7_explicit_unmap)
++      return false;
++   ws->ff7_explicit_destroy = !strcmp(mode, "1");
++   if (dir) {
++      char path[4096];
++      int n = snprintf(path, sizeof(path), "%s/destroy-%ld-%p.bin", dir, (long)getpid(), (void *)ws);
++      if (n < 0 || (size_t)n >= sizeof(path))
++         return false;
++      int fd = open(path, O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600);
++      if (fd < 0)
++         return false;
++      if (ftruncate(fd, 4096)) {
++         close(fd);
++         return false;
++      }
++      void *map = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
++      close(fd);
++      if (map == MAP_FAILED)
++         return false;
++      ws->ff7_destroy_stats = map;
++      ws->ff7_destroy_stats[0] = UINT64_C(0x313645374646);
++      ws->ff7_destroy_stats[1] = 1;
++      ws->ff7_destroy_stats[2] = getpid();
++      ws->ff7_destroy_stats[3] = ws->ff7_explicit_destroy;
++   }
++   fprintf(stderr, "FF7_E16_RADV_v1: pid=%ld explicit_destroy=%u scope=api_owned kernel_lifetime_guard=retained\n",
++           (long)getpid(), ws->ff7_explicit_destroy);
++   return true;
++}
++
++void
++radv_amdgpu_ff7_destroy_finish(struct radv_amdgpu_winsys *ws)
++{
++   if (ws->ff7_destroy_stats) {
++      munmap(ws->ff7_destroy_stats, 4096);
++      ws->ff7_destroy_stats = NULL;
++   }
++}
++
++static uint64_t
++radv_amdgpu_ff7_destroy_begin(struct radv_amdgpu_winsys *ws, struct radv_amdgpu_winsys_bo *bo)
++{
++   bool eligible = bo->base.ff7_api_owned && (bo->base.is_virtual || bo->base.is_local);
++   if (ws->ff7_destroy_stats)
++      p_atomic_inc(&ws->ff7_destroy_stats[eligible ? (bo->base.is_virtual ? 5 : 4) : 6]);
++   /* API lifetime requirements cover prior uses; kernel fallback still checks
++    * every removed mapping's backing lifetime, and keeps moves/TLB ordering.
++    * Never generalize this to driver-internal allocations freed while in use.
++    */
++   return eligible && ws->ff7_explicit_destroy ? FF7_VM_EXPLICIT : 0;
++}
++
++static void
++radv_amdgpu_ff7_destroy_done(struct radv_amdgpu_winsys *ws, bool explicit_sync, bool is_virtual, int result)
++{
++   if (ws->ff7_destroy_stats)
++      p_atomic_inc(&ws->ff7_destroy_stats[result ? 10 : explicit_sync ? (is_virtual ? 8 : 7) : 9]);
++   if (result)
++      fprintf(stderr, "FF7_E16: destruction VA operation failed (%d).\n", result);
++}
+ 
+ bool
+ radv_amdgpu_ff7_init(struct radv_amdgpu_winsys *ws, bool is_virtio)
+@@ -89,6 +162,10 @@
+          return false;
+       }
+    }
++   if (!radv_amdgpu_ff7_destroy_init(ws)) {
++      fprintf(stderr, "FF7_E16: invalid mode or cannot initialize private counters.\n");
++      return false;
++   }
+    fprintf(stderr, "FF7_E12_RADV_v1: explicit_unmap=%u dedicated_sparse=implicit\n",
+            ws->base.ff7_explicit_unmap);
+    fprintf(stderr, "FF7_E09_RADV_v1: pid=%ld mode=%s split_rejected=%u device=0x744c max_entries=16\n",
+@@ -148,7 +225,7 @@
+    int r;
+ 
+    if (bo_handle) {
+-      flags = AMDGPU_VM_PAGE_READABLE | AMDGPU_VM_PAGE_EXECUTABLE;
++      flags |= AMDGPU_VM_PAGE_READABLE | AMDGPU_VM_PAGE_EXECUTABLE;
+ 
+       if ((bo_flags & RADEON_FLAG_GL2_BYPASS) && ws->info.gfx_level >= GFX9)
+          flags |= AMDGPU_VM_MTYPE_UC;
+@@ -303,11 +380,11 @@
+ }
+ 
+ static int
+-radv_amdgpu_virtual_bo_clear_mapping(struct radv_amdgpu_winsys *ws, struct radv_amdgpu_winsys_bo *bo)
++radv_amdgpu_virtual_bo_clear_mapping(struct radv_amdgpu_winsys *ws, struct radv_amdgpu_winsys_bo *bo, uint64_t flags)
+ {
+    int r;
+ 
+-   r = radv_amdgpu_bo_va_op(ws, 0, 0, bo->base.size, bo->base.va, 0, 0, AMDGPU_VA_OP_CLEAR, NULL);
++   r = radv_amdgpu_bo_va_op(ws, 0, 0, bo->base.size, bo->base.va, 0, flags, AMDGPU_VA_OP_CLEAR, NULL);
+    if (r)
+       return r;
+ 
+@@ -315,7 +392,7 @@
+       /* Clear the "LOW" address space mapping when it's released. */
+       const uint64_t low_va = radv_amdgpu_virtual_bo_get_low_addr(ws, bo);
+ 
+-      r = radv_amdgpu_bo_va_op(ws, 0, 0, bo->base.size, low_va, 0, 0, AMDGPU_VA_OP_CLEAR, NULL);
++      r = radv_amdgpu_bo_va_op(ws, 0, 0, bo->base.size, low_va, 0, flags, AMDGPU_VA_OP_CLEAR, NULL);
+    }
+ 
+    return r;
+@@ -468,20 +545,21 @@
+    u_rwlock_wrunlock(&ws->global_bo_list.lock);
+ }
+ 
+-static void
+-radv_amdgpu_winsys_virtual_bo_destroy(struct radeon_winsys *_ws, struct radeon_winsys_bo *_bo)
++static int
++radv_amdgpu_winsys_virtual_bo_destroy(struct radeon_winsys *_ws, struct radeon_winsys_bo *_bo, uint64_t flags)
+ {
+    struct radv_amdgpu_winsys *ws = radv_amdgpu_winsys(_ws);
+    struct radv_amdgpu_winsys_bo *bo = radv_amdgpu_winsys_bo(_bo);
+    int r;
+ 
+-   r = radv_amdgpu_virtual_bo_clear_mapping(ws, bo);
++   r = radv_amdgpu_virtual_bo_clear_mapping(ws, bo, flags);
+    if (r) {
+       fprintf(stderr, "radv/amdgpu: Failed to clear a PRT VA region (%d).\n", r);
+    }
+ 
+    ac_drm_va_range_free(bo->va_handle);
+    FREE(bo);
++   return r;
+ }
+ 
+ static void
+@@ -490,10 +568,12 @@
+    struct radv_amdgpu_winsys *ws = radv_amdgpu_winsys(_ws);
+    struct radv_amdgpu_winsys_bo *bo = radv_amdgpu_winsys_bo(_bo);
+ 
++   uint64_t flags = radv_amdgpu_ff7_destroy_begin(ws, bo);
+    radv_amdgpu_log_bo(ws, bo, true);
+ 
+    if (bo->base.is_virtual) {
+-      radv_amdgpu_winsys_virtual_bo_destroy(_ws, _bo);
++      int r = radv_amdgpu_winsys_virtual_bo_destroy(_ws, _bo, flags);
++      radv_amdgpu_ff7_destroy_done(ws, flags != 0, true, r);
+       return;
+    }
+ 
+@@ -504,7 +584,8 @@
+       radv_amdgpu_global_bo_list_del(ws, bo);
+ 
+    const uint64_t va_size = radv_amdgpu_bo_va_size(bo->base.size, bo->flags);
+-   radv_amdgpu_bo_va_op(ws, bo->bo_handle, 0, va_size, bo->base.va, 0, 0, AMDGPU_VA_OP_UNMAP, NULL);
++   int r = radv_amdgpu_bo_va_op(ws, bo->bo_handle, 0, va_size, bo->base.va, 0, flags, AMDGPU_VA_OP_UNMAP, NULL);
++   radv_amdgpu_ff7_destroy_done(ws, flags != 0, false, r);
+    ac_drm_bo_free(ws->dev, bo->bo);
+ 
+    if (bo->base.initial_domain & RADEON_DOMAIN_VRAM) {

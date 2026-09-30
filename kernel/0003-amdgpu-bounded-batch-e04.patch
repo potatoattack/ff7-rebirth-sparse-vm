@@ -1,0 +1,635 @@
+From: FF7 local performance investigation
+Subject: [EXPERIMENT E04] drm/amdgpu: bounded same-BO multi-range PTE submission
+
+Apply after E01 and E03 to the checksum-pinned CachyOS 7.2.8-1 source.
+This private ABI is a native hardware experiment, not a stable userspace API.
+Ordinary applications use their existing paths. The native-only adapter uses
+GEM_VA operation 0xf704 with at most 16 ordinary 64-byte GEM_VA entries. Only
+existing aligned 64 KiB VRAM mappings of the same VM-always-valid BO qualify.
+
+Retain implicit unmap/movement dependencies, final completion/TLB handling and
+DONT_PIPELINE. Form all leaf updates in one existing-size 1 KiB SDMA IB, and
+commit once; reject overflow without submitting a partial batch. No chunk
+GPU waits, pool enlargement or explicit-sync treatment is introduced.
+EOPNOTSUPP is a pre-mutation eligibility rejection; other failures must not be
+replayed by userspace. Correctness and performance on hardware remain untested.
+
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_gem.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_gem.c
+@@ -844,6 +844,127 @@
+ 	return dma_fence_get(ctx->vm->last_update);
+ }
+ 
++/* Private E04 ABI; only existing same-BO 64 KiB VRAM replacements. */
++static int amdgpu_gem_ff7_batch_ioctl(struct drm_device *dev,
++		struct drm_amdgpu_gem_va *header, struct drm_file *filp)
++{
++	const u32 flags_mask = AMDGPU_VM_PAGE_READABLE | AMDGPU_VM_PAGE_WRITEABLE |
++		AMDGPU_VM_PAGE_EXECUTABLE | AMDGPU_VM_MTYPE_MASK | AMDGPU_VM_PAGE_NOALLOC;
++	struct amdgpu_device *adev = drm_to_adev(dev);
++	struct amdgpu_fpriv *fpriv = filp->driver_priv;
++	struct amdgpu_vm *vm = &fpriv->vm;
++	struct drm_amdgpu_gem_va *entries;
++	struct drm_gem_object *gobj;
++	struct amdgpu_bo *bo;
++	struct amdgpu_bo_va *bo_va;
++	struct amdgpu_vm_update_ctx ctx;
++	struct drm_exec exec;
++	unsigned int count, i, j;
++	u64 end, vm_size;
++	int r = 0;
++
++	if (!header->handle || header->_pad || header->flags || header->map_size ||
++	    header->vm_timeline_point || header->vm_timeline_syncobj_out ||
++	    header->num_syncobj_handles || header->input_fence_syncobj_handles ||
++	    !header->offset_in_bo || header->offset_in_bo > AMDGPU_FF7_BATCH_MAX)
++		return -EINVAL;
++	count = header->offset_in_bo;
++	entries = memdup_user(u64_to_user_ptr(header->va_address),
++			     count * sizeof(*entries));
++	if (IS_ERR(entries))
++		return PTR_ERR(entries);
++	vm_size = adev->vm_manager.max_pfn * AMDGPU_GPU_PAGE_SIZE - AMDGPU_VA_RESERVED_TOP;
++	for (i = 0; i < count; ++i) {
++		struct drm_amdgpu_gem_va *e = &entries[i];
++		if (e->handle != header->handle || e->_pad ||
++		    e->operation != AMDGPU_VA_OP_REPLACE || (e->flags & ~flags_mask) ||
++		    e->map_size != SZ_64K || !IS_ALIGNED(e->va_address, SZ_64K) ||
++		    !IS_ALIGNED(e->offset_in_bo, SZ_64K) || e->vm_timeline_point ||
++		    e->vm_timeline_syncobj_out || e->num_syncobj_handles ||
++		    e->input_fence_syncobj_handles ||
++		    e->va_address < AMDGPU_VA_RESERVED_BOTTOM ||
++		    (e->va_address >= AMDGPU_GMC_HOLE_START && e->va_address < AMDGPU_GMC_HOLE_END)) {
++			r = -EINVAL;
++			goto free_entries;
++		}
++		e->va_address &= AMDGPU_GMC_HOLE_MASK;
++		if (check_add_overflow(e->va_address, e->map_size, &end) || end > vm_size) {
++			r = -EINVAL;
++			goto free_entries;
++		}
++		for (j = 0; j < i; ++j) {
++			if (entries[j].va_address == e->va_address) {
++				r = -EINVAL;
++				goto free_entries;
++			}
++		}
++	}
++	gobj = drm_gem_object_lookup(filp, header->handle);
++	if (!gobj) {
++		r = -ENOENT;
++		goto free_entries;
++	}
++	bo = gem_to_amdgpu_bo(gobj);
++	amdgpu_vm_update_ctx_init(&ctx, adev, vm);
++	drm_exec_init(&exec, DRM_EXEC_INTERRUPTIBLE_WAIT | DRM_EXEC_IGNORE_DUPLICATES, 0);
++	drm_exec_until_all_locked(&exec) {
++		r = drm_exec_lock_obj(&exec, gobj);
++		drm_exec_retry_on_contention(&exec);
++		if (r)
++			goto unlock;
++		r = amdgpu_vm_lock_pd(vm, &exec, 2);
++		drm_exec_retry_on_contention(&exec);
++		if (r)
++			goto unlock;
++	}
++	bo_va = amdgpu_vm_bo_find(vm, bo);
++	/* EOPNOTSUPP is allowed only BEFORE modifying any mapping. */
++	if (!bo_va || adev->debug_vm || !amdgpu_vm_ready(vm) ||
++	    vm->update_funcs != &amdgpu_vm_sdma_funcs ||
++	    !amdgpu_vm_is_bo_always_valid(vm, bo) || bo_va->base.moved ||
++	    bo_va->cleared || bo_va->is_xgmi || bo_va->userq_va_mapped ||
++	    !list_empty(&bo_va->invalids) || !bo->tbo.resource ||
++	    bo->tbo.resource->mem_type != TTM_PL_VRAM ||
++	    amdgpu_bo_encrypted(bo)) {
++		r = -EOPNOTSUPP;
++		goto unlock;
++	}
++	for (i = 0; i < count; ++i) {
++		struct drm_amdgpu_gem_va *e = &entries[i];
++		struct amdgpu_bo_va_mapping *old;
++		u64 start = e->va_address >> AMDGPU_GPU_PAGE_SHIFT;
++		if (check_add_overflow(e->offset_in_bo, e->map_size, &end) ||
++		    end > amdgpu_bo_size(bo)) {
++			r = -EINVAL;
++			goto unlock;
++		}
++		old = amdgpu_vm_bo_lookup_mapping(vm, start);
++		if (!old || old->bo_va != bo_va || old->start != start ||
++		    old->last != start + SZ_64K / AMDGPU_GPU_PAGE_SIZE - 1) {
++			r = -EOPNOTSUPP;
++			goto unlock;
++		}
++	}
++	for (i = 0; i < count; ++i) {
++		struct drm_amdgpu_gem_va *e = &entries[i];
++		r = amdgpu_vm_bo_replace_map(&ctx, bo_va, e->va_address,
++					    e->offset_in_bo, e->map_size, e->flags);
++		if (r)
++			goto unlock;
++	}
++	r = amdgpu_vm_ff7_batch_replace(&ctx, bo_va);
++	if (!r)
++		r = amdgpu_vm_update_pdes(adev, vm, false);
++unlock:
++	amdgpu_vm_update_ctx_fini(&ctx);
++	drm_exec_fini(&exec);
++	drm_gem_object_put(gobj);
++free_entries:
++	amdgpu_vm_ff7_batch_note(count, r);
++	kfree(entries);
++	return r;
++}
++
+ int amdgpu_gem_va_ioctl(struct drm_device *dev, void *data,
+ 			  struct drm_file *filp)
+ {
+@@ -870,6 +991,9 @@
+ 	struct drm_exec exec;
+ 	uint64_t vm_size, tmp;
+ 	int r = 0;
++
++	if (args->operation == AMDGPU_VA_OP_FF7_BATCH_REPLACE)
++		return amdgpu_gem_ff7_batch_ioctl(dev, args, filp);
+ 
+ 	/* Validate virtual address range against reserved regions. */
+ 	if (args->va_address < AMDGPU_VA_RESERVED_BOTTOM) {
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_vm.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_vm.c
+@@ -103,6 +103,40 @@
+ 	.get = ff7_vm_e03_stats_get,
+ };
+ module_param_cb(ff7_vm_e03_stats, &ff7_vm_e03_stats_ops, NULL, 0444);
++
++/* E04: bounded multi-range submissions; no changed defaults. */
++static unsigned int ff7_vm_batch_replace = 1;
++module_param_named(ff7_vm_batch_replace, ff7_vm_batch_replace, uint, 0444);
++static atomic64_t ff7_e04_calls, ff7_e04_entries, ff7_e04_jobs;
++static atomic64_t ff7_e04_ranges, ff7_e04_unsupported, ff7_e04_errors;
++void amdgpu_vm_ff7_batch_job(void) { atomic64_inc(&ff7_e04_jobs); }
++void amdgpu_vm_ff7_batch_note(unsigned int count, int result)
++{
++	if (!result) {
++		atomic64_inc(&ff7_e04_calls);
++		atomic64_add(count, &ff7_e04_entries);
++	} else if (result == -EOPNOTSUPP) {
++		atomic64_inc(&ff7_e04_unsupported);
++	} else {
++		atomic64_inc(&ff7_e04_errors);
++	}
++}
++static int ff7_vm_e04_stats_get(char *buffer, const struct kernel_param *kp)
++{
++	return scnprintf(buffer, PAGE_SIZE,
++		"batches=%lld entries=%lld ranges=%lld jobs=%lld unsupported=%lld errors=%lld\n",
++		(long long)atomic64_read(&ff7_e04_calls),
++		(long long)atomic64_read(&ff7_e04_entries),
++		(long long)atomic64_read(&ff7_e04_ranges),
++		(long long)atomic64_read(&ff7_e04_jobs),
++		(long long)atomic64_read(&ff7_e04_unsupported),
++		(long long)atomic64_read(&ff7_e04_errors));
++}
++static const struct kernel_param_ops ff7_vm_e04_stats_ops = {
++	.get = ff7_vm_e04_stats_get,
++};
++module_param_cb(ff7_vm_e04_stats, &ff7_vm_e04_stats_ops, NULL, 0444);
++
+ 
+ 
+ /**
+@@ -1236,6 +1270,72 @@
+  * Returns:
+  * 0 for success, negative erro code for failure.
+  */
++static int amdgpu_vm_emit_range(struct amdgpu_vm_update_params *params,
++		uint64_t start, uint64_t last, uint64_t flags, uint64_t offset,
++		uint64_t vram_base, struct ttm_resource *res, dma_addr_t *pages_addr)
++{
++	struct amdgpu_device *adev = params->adev;
++	struct amdgpu_res_cursor cursor;
++	int r;
++
++	params->pages_addr = pages_addr;
++	amdgpu_res_first(pages_addr ? NULL : res, offset,
++			 (last - start + 1) * AMDGPU_GPU_PAGE_SIZE, &cursor);
++	while (cursor.remaining) {
++		uint64_t tmp, num_entries, addr;
++
++		num_entries = cursor.size >> AMDGPU_GPU_PAGE_SHIFT;
++		if (pages_addr) {
++			bool contiguous = true;
++
++			if (num_entries > AMDGPU_GPU_PAGES_IN_CPU_PAGE) {
++				uint64_t pfn = cursor.start >> PAGE_SHIFT;
++				uint64_t count;
++
++				contiguous = pages_addr[pfn + 1] ==
++					pages_addr[pfn] + PAGE_SIZE;
++
++				tmp = num_entries /
++					AMDGPU_GPU_PAGES_IN_CPU_PAGE;
++				for (count = 2; count < tmp; ++count) {
++					uint64_t idx = pfn + count;
++
++					if (contiguous != (pages_addr[idx] ==
++					    pages_addr[idx - 1] + PAGE_SIZE))
++						break;
++				}
++				if (!contiguous)
++					count--;
++				num_entries = count *
++					AMDGPU_GPU_PAGES_IN_CPU_PAGE;
++			}
++
++			if (!contiguous) {
++				addr = cursor.start;
++				params->pages_addr = pages_addr;
++			} else {
++				addr = pages_addr[cursor.start >> PAGE_SHIFT];
++				params->pages_addr = NULL;
++			}
++
++		} else if (flags & (AMDGPU_PTE_VALID | AMDGPU_PTE_PRT_FLAG(adev))) {
++			addr = vram_base + cursor.start;
++		} else {
++			addr = 0;
++		}
++
++		tmp = start + num_entries;
++		r = amdgpu_vm_ptes_update(params, start, tmp, addr, flags);
++		if (r)
++			return r;
++
++		amdgpu_res_next(&cursor, num_entries * AMDGPU_GPU_PAGE_SIZE);
++		start = tmp;
++	}
++
++	return 0;
++}
++
+ static int amdgpu_vm_update_range_mode(struct amdgpu_device *adev, struct amdgpu_vm *vm,
+ 			   bool immediate, bool unlocked, bool flush_tlb,
+ 			   bool allow_override, struct amdgpu_sync *sync,
+@@ -1246,7 +1346,6 @@
+ {
+ 	struct amdgpu_vm_tlb_seq_struct *tlb_cb;
+ 	struct amdgpu_vm_update_params params;
+-	struct amdgpu_res_cursor cursor;
+ 	int r, idx;
+ 
+ 	if (!drm_dev_enter(adev_to_drm(adev), &idx))
+@@ -1301,59 +1400,10 @@
+ 	if (r)
+ 		goto error_free;
+ 
+-	amdgpu_res_first(pages_addr ? NULL : res, offset,
+-			 (last - start + 1) * AMDGPU_GPU_PAGE_SIZE, &cursor);
+-	while (cursor.remaining) {
+-		uint64_t tmp, num_entries, addr;
+-
+-		num_entries = cursor.size >> AMDGPU_GPU_PAGE_SHIFT;
+-		if (pages_addr) {
+-			bool contiguous = true;
+-
+-			if (num_entries > AMDGPU_GPU_PAGES_IN_CPU_PAGE) {
+-				uint64_t pfn = cursor.start >> PAGE_SHIFT;
+-				uint64_t count;
+-
+-				contiguous = pages_addr[pfn + 1] ==
+-					pages_addr[pfn] + PAGE_SIZE;
+-
+-				tmp = num_entries /
+-					AMDGPU_GPU_PAGES_IN_CPU_PAGE;
+-				for (count = 2; count < tmp; ++count) {
+-					uint64_t idx = pfn + count;
+-
+-					if (contiguous != (pages_addr[idx] ==
+-					    pages_addr[idx - 1] + PAGE_SIZE))
+-						break;
+-				}
+-				if (!contiguous)
+-					count--;
+-				num_entries = count *
+-					AMDGPU_GPU_PAGES_IN_CPU_PAGE;
+-			}
+-
+-			if (!contiguous) {
+-				addr = cursor.start;
+-				params.pages_addr = pages_addr;
+-			} else {
+-				addr = pages_addr[cursor.start >> PAGE_SHIFT];
+-				params.pages_addr = NULL;
+-			}
+-
+-		} else if (flags & (AMDGPU_PTE_VALID | AMDGPU_PTE_PRT_FLAG(adev))) {
+-			addr = vram_base + cursor.start;
+-		} else {
+-			addr = 0;
+-		}
+-
+-		tmp = start + num_entries;
+-		r = amdgpu_vm_ptes_update(&params, start, tmp, addr, flags);
+-		if (r)
+-			goto error_free;
+-
+-		amdgpu_res_next(&cursor, num_entries * AMDGPU_GPU_PAGE_SIZE);
+-		start = tmp;
+-	}
++	r = amdgpu_vm_emit_range(&params, start, last, flags, offset,
++				 vram_base, res, pages_addr);
++	if (r)
++		goto error_free;
+ 
+ 	r = vm->update_funcs->commit(&params, fence);
+ 	if (r)
+@@ -1395,6 +1445,84 @@
+ 	spin_unlock(&vm->stats_lock);
+ }
+ 
++struct amdgpu_vm_ff7_batch_state {
++	struct amdgpu_vm_update_params params;
++	struct amdgpu_vm_tlb_seq_struct *tlb_cb;
++	int idx;
++	bool active;
++};
++
++static int amdgpu_vm_ff7_batch_begin(struct amdgpu_vm_update_ctx *ctx,
++				   struct amdgpu_vm_ff7_batch_state *b,
++				   bool allow_override)
++{
++	struct amdgpu_vm *vm = ctx->vm;
++	int r;
++
++	if (!drm_dev_enter(adev_to_drm(ctx->adev), &b->idx))
++		return -ENODEV;
++	b->tlb_cb = kmalloc_obj(*b->tlb_cb);
++	if (!b->tlb_cb) {
++		drm_dev_exit(b->idx);
++		return -ENOMEM;
++	}
++	b->params.adev = ctx->adev;
++	b->params.vm = vm;
++	b->params.needs_flush = true;
++	b->params.ff7_e04_batch = true;
++	b->params.override_pte = allow_override && ctx->adev->gmc.override_pte;
++	INIT_LIST_HEAD(&b->params.tlb_flush_waitlist);
++	amdgpu_vm_eviction_lock(vm);
++	if (vm->evicting) {
++		r = -EBUSY;
++		goto fail;
++	}
++	if (!dma_fence_is_signaled(vm->last_unlocked)) {
++		struct dma_fence *tmp = dma_fence_get_stub();
++		amdgpu_bo_fence(vm->root.bo, vm->last_unlocked, true);
++		swap(vm->last_unlocked, tmp);
++		dma_fence_put(tmp);
++	}
++	r = vm->update_funcs->prepare(&b->params, &ctx->sync,
++				     AMDGPU_KERNEL_JOB_ID_VM_UPDATE_RANGE);
++	if (r)
++		goto fail;
++	b->active = true;
++	return 0;
++fail:
++	amdgpu_vm_eviction_unlock(vm);
++	kfree(b->tlb_cb);
++	drm_dev_exit(b->idx);
++	return r;
++}
++
++static void amdgpu_vm_ff7_batch_abort(struct amdgpu_vm_ff7_batch_state *b)
++{
++	/* Batch SDMA updates cannot auto-submit; PT traversal is leaf-only. */
++	amdgpu_job_free(b->params.job);
++	WARN_ON(!list_empty(&b->params.tlb_flush_waitlist));
++	amdgpu_vm_eviction_unlock(b->params.vm);
++	kfree(b->tlb_cb);
++	drm_dev_exit(b->idx);
++	b->active = false;
++}
++
++static int amdgpu_vm_ff7_batch_end(struct amdgpu_vm_ff7_batch_state *b,
++				 struct dma_fence **fence)
++{
++	int r = b->params.vm->update_funcs->commit(&b->params, fence);
++
++	if (r)
++		return r;
++	amdgpu_vm_tlb_flush(&b->params, fence, b->tlb_cb);
++	b->tlb_cb = NULL;
++	WARN_ON(!list_empty(&b->params.tlb_flush_waitlist));
++	amdgpu_vm_eviction_unlock(b->params.vm);
++	drm_dev_exit(b->idx);
++	b->active = false;
++	return 0;
++}
++
+ /**
+  * amdgpu_vm_bo_update - update all BO mappings in the vm page table
+  *
+@@ -1412,6 +1540,7 @@
+ {
+ 	struct amdgpu_bo *bo = bo_va->base.bo;
+ 	struct amdgpu_vm *vm = ctx->vm;
++	struct amdgpu_vm_ff7_batch_state batch = { };
+ 	struct amdgpu_bo_va_mapping *mapping;
+ 	struct dma_fence **last_update;
+ 	dma_addr_t *pages_addr = NULL;
+@@ -1492,6 +1621,12 @@
+ 		list_splice_init(&bo_va->valids, &bo_va->invalids);
+ 	}
+ 
++	if (ctx->ff7_e04_batch) {
++		r = amdgpu_vm_ff7_batch_begin(ctx, &batch, !uncached);
++		if (r)
++			goto error;
++	}
++
+ 	list_for_each_entry(mapping, &bo_va->invalids, list) {
+ 		uint64_t update_flags = flags;
+ 
+@@ -1509,12 +1644,25 @@
+ 
+ 		trace_amdgpu_vm_bo_update(mapping);
+ 
++		if (batch.active) {
++			r = amdgpu_vm_emit_range(&batch.params, mapping->start,
++					 mapping->last, update_flags, mapping->offset,
++					 vram_base, mem, pages_addr);
++			atomic64_inc(&ff7_e04_ranges);
++		} else {
+ 		r = amdgpu_vm_update_range_mode(ctx->adev, vm, false, false,
+ 					   flush_tlb, !uncached, &ctx->sync,
+ 					   mapping->start, mapping->last,
+ 					   update_flags, mapping->offset,
+ 					   vram_base, mem, pages_addr,
+ 					   last_update, ctx->ff7_e03_mode);
++		}
++		if (r)
++			goto error;
++	}
++
++	if (batch.active) {
++		r = amdgpu_vm_ff7_batch_end(&batch, last_update);
+ 		if (r)
+ 			goto error;
+ 	}
+@@ -1544,6 +1692,8 @@
+ 	}
+ 
+ error:
++	if (batch.active)
++		amdgpu_vm_ff7_batch_abort(&batch);
+ 	return r;
+ }
+ 
+@@ -1795,6 +1945,31 @@
+ 	}
+ 	dma_fence_put(fence);
+ 	atomic64_add(eliminated, &ff7_e03_eliminated);
++	return 0;
++}
++
++/* Called after the private GEM handler validated every old/new range. */
++int amdgpu_vm_ff7_batch_replace(struct amdgpu_vm_update_ctx *ctx,
++			       struct amdgpu_bo_va *bo_va)
++{
++	struct amdgpu_bo_va_mapping *mapping, *next;
++	int r = amdgpu_vm_update_ctx_ensure_unmap_synced(ctx);
++
++	if (r)
++		return r;
++	ctx->ff7_direct_active = true;
++	ctx->ff7_e04_batch = true;
++	r = amdgpu_vm_bo_update(ctx, bo_va, false);
++	ctx->ff7_e04_batch = false;
++	ctx->ff7_direct_active = false;
++	if (r)
++		return r;
++	/* The target BO is VM-always-valid: bo_update published last_update. */
++	list_for_each_entry_safe(mapping, next, &ctx->freed, list) {
++		list_del(&mapping->list);
++		amdgpu_vm_free_mapping(ctx->adev, ctx->vm, mapping,
++				       ctx->vm->last_update);
++	}
+ 	return 0;
+ }
+ 
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_vm.h
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_vm.h
+@@ -298,6 +298,7 @@
+ 	bool ff7_explicit_requested;
+ 	u8 ff7_e03_mode; /* 0: unchanged, 1: counted control, 2: treatment */
+ 	bool ff7_direct_active;
++	bool ff7_e04_batch;
+ 	int ff7_e03_error;
+ };
+ 
+@@ -347,6 +348,7 @@
+ 	 */
+ 	unsigned int num_dw_left;
+ 	u8 ff7_e03_mode;
++	bool ff7_e04_batch;
+ 
+ 	/**
+ 	 * @needs_flush: true whenever we need to invalidate the TLB
+@@ -562,6 +564,10 @@
+ 			  struct amdgpu_bo_va *bo_va);
+ void amdgpu_vm_ff7_account_job(unsigned int mode);
+ void amdgpu_vm_ff7_account_error(void);
++int amdgpu_vm_ff7_batch_replace(struct amdgpu_vm_update_ctx *ctx,
++			       struct amdgpu_bo_va *bo_va);
++void amdgpu_vm_ff7_batch_note(unsigned int count, int result);
++void amdgpu_vm_ff7_batch_job(void);
+ int amdgpu_vm_clear_freed(struct amdgpu_vm_update_ctx *ctx,
+ 			  struct dma_fence **fence);
+ int amdgpu_vm_delayed_free(struct amdgpu_device *adev, struct amdgpu_vm *vm);
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_vm_pt.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_vm_pt.c
+@@ -672,7 +672,7 @@
+  *
+  * Make sure to set the right flags for the PTEs at the desired level.
+  */
+-static void amdgpu_vm_pte_update_flags(struct amdgpu_vm_update_params *params,
++static int amdgpu_vm_pte_update_flags(struct amdgpu_vm_update_params *params,
+ 				       struct amdgpu_bo_vm *pt,
+ 				       unsigned int level,
+ 				       uint64_t pe, uint64_t addr,
+@@ -706,7 +706,7 @@
+ 	if (level == AMDGPU_VM_PTB)
+ 		amdgpu_vm_pte_update_noretry_flags(adev, &flags);
+ 
+-	params->vm->update_funcs->update(params, pt, pe, addr, count, incr,
++	return params->vm->update_funcs->update(params, pt, pe, addr, count, incr,
+ 					 flags);
+ }
+ 
+@@ -806,7 +806,17 @@
+ 		uint64_t incr, entry_end, pe_start;
+ 		struct amdgpu_bo *pt;
+ 
+-		if (!params->unlocked) {
++		/* E04 replaces existing 64 KiB leaves only. It must never allocate,
++		 * free or change the page-table hierarchy while forming a batch. */
++		if (params->ff7_e04_batch) {
++			if (cursor.level != AMDGPU_VM_PTB) {
++				if (amdgpu_vm_pt_descendant(adev, &cursor))
++					continue;
++				return -ENOENT;
++			}
++			if (!cursor.entry->bo)
++				return -ENOENT;
++		} else if (!params->unlocked) {
+ 			/* make sure that the page tables covering the
+ 			 * address range are actually allocated
+ 			 */
+@@ -896,9 +906,11 @@
+ 						    upd_flags,
+ 						    vm->task_info ? vm->task_info->tgid : 0,
+ 						    vm->immediate.fence_context);
+-			amdgpu_vm_pte_update_flags(params, to_amdgpu_bo_vm(pt),
++			r = amdgpu_vm_pte_update_flags(params, to_amdgpu_bo_vm(pt),
+ 						   cursor.level, pe_start, dst,
+ 						   nptes, incr, upd_flags);
++			if (params->ff7_e04_batch && r)
++				return r;
+ 
+ 			pe_start += nptes * 8;
+ 			dst += nptes * incr;
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_vm_sdma.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_vm_sdma.c
+@@ -123,6 +123,10 @@
+ 	f = amdgpu_job_submit(p->job);
+ 	if (p->ff7_e03_mode)
+ 		amdgpu_vm_ff7_account_job(p->ff7_e03_mode);
++	if (p->ff7_e04_batch) {
++		amdgpu_vm_ff7_batch_job();
++		p->job = NULL;
++	}
+ 
+ 	if (p->unlocked) {
+ 		struct dma_fence *tmp = dma_fence_get(f);
+@@ -248,6 +252,9 @@
+ 		ndw -= p->job->ibs->length_dw;
+ 
+ 		if (ndw < 32) {
++			/* E04 is one bounded IB: do not partly submit then fail. */
++			if (p->ff7_e04_batch)
++				return -E2BIG;
+ 			r = amdgpu_vm_sdma_commit(p, NULL);
+ 			if (r)
+ 				return r;
+--- a/include/uapi/drm/amdgpu_drm.h
++++ b/include/uapi/drm/amdgpu_drm.h
+@@ -905,6 +905,11 @@
+ /* Private E03 ABI. No application opts in unless both sides know this build. */
+ #define AMDGPU_VM_FF7_ACCOUNT		(1 << 11)
+ #define AMDGPU_VM_FF7_DIRECT_REPLACE	(1 << 12)
++/* Private E04 GEM_VA operation. Header: handle, entries pointer in va_address,
++ * entry count in offset_in_bo; all other input fields except operation zero.
++ * Array elements use the ordinary 64-byte GEM_VA layout. */
++#define AMDGPU_VA_OP_FF7_BATCH_REPLACE	0xf704
++#define AMDGPU_FF7_BATCH_MAX		16
+ 
+ struct drm_amdgpu_gem_va {
+ 	/** GEM object handle */

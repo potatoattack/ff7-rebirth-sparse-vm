@@ -1,0 +1,375 @@
+From: FF7 local performance investigation
+Subject: [EXPERIMENT E03] drm/amdgpu: opt-in direct sparse REPLACE with retained synchronization
+
+Based on the supplied E01 tree; apply after 0001-amdgpu-explicit-unmap-e01.patch.
+This is a private hardware experiment, not a proposed stable ABI or a proven fix.
+It retains implicit unmap dependencies and requests TLB invalidation on the new
+mapping instead of submitting a separate clear range. Old PRT references are
+retired against the replacement fence. All unsupported cases use the original
+clear/map path. Accounted control and treatment submit real job counters.
+
+The E01 explicit-sync flag and DELAY_UPDATE are rejected together with the E03
+flags. Ordinary applications do not set either private E03 flag.
+
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_gem.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_gem.c
+@@ -785,6 +785,13 @@
+ 	 * schedules GPU work. If nothing needs clearing, @fence can remain as
+ 	 * the original vm->last_update.
+ 	 */
++	if (ctx->ff7_e03_mode && operation == AMDGPU_VA_OP_REPLACE) {
++		r = amdgpu_vm_ff7_replace(ctx, bo_va);
++		if (r)
++			goto error;
++		goto update_pdes;
++	}
++
+ 	r = amdgpu_vm_clear_freed(ctx, &ctx->vm->last_update);
+ 	if (r)
+ 		goto error;
+@@ -797,6 +804,7 @@
+ 			goto error;
+ 	}
+ 
++update_pdes:
+ 	/* Always update PDEs after we touched the mappings. */
+ 	r = amdgpu_vm_update_pdes(ctx->adev, ctx->vm, false);
+ 	if (r)
+@@ -826,6 +834,10 @@
+ 	return fence;
+ 
+ error:
++	if (ctx->ff7_e03_mode) {
++		ctx->ff7_e03_error = r;
++		amdgpu_vm_ff7_account_error();
++	}
+ 	if (r && r != -ERESTARTSYS)
+ 		DRM_ERROR("Couldn't update BO_VA (%d)\n", r);
+ 
+@@ -836,11 +848,14 @@
+ 			  struct drm_file *filp)
+ {
+ 	const uint32_t valid_flags =
++		AMDGPU_VM_FF7_ACCOUNT | AMDGPU_VM_FF7_DIRECT_REPLACE |
+ 		AMDGPU_VM_EXPLICIT_SYNC | AMDGPU_VM_DELAY_UPDATE |
+ 		AMDGPU_VM_PAGE_READABLE | AMDGPU_VM_PAGE_WRITEABLE |
+ 		AMDGPU_VM_PAGE_EXECUTABLE | AMDGPU_VM_MTYPE_MASK |
+ 		AMDGPU_VM_PAGE_NOALLOC;
+-	const uint32_t prt_flags = AMDGPU_VM_EXPLICIT_SYNC |
++	const uint32_t prt_flags = AMDGPU_VM_FF7_ACCOUNT |
++				   AMDGPU_VM_FF7_DIRECT_REPLACE |
++				   AMDGPU_VM_EXPLICIT_SYNC |
+ 				   AMDGPU_VM_DELAY_UPDATE | AMDGPU_VM_PAGE_PRT;
+ 
+ 	struct drm_amdgpu_gem_va *args = data;
+@@ -890,6 +905,15 @@
+ 		return -EINVAL;
+ 	}
+ 
++	/* E03 must be immediate and retain ordinary implicit unmap ordering. */
++	if (args->flags & (AMDGPU_VM_FF7_ACCOUNT | AMDGPU_VM_FF7_DIRECT_REPLACE)) {
++		if (!(args->flags & AMDGPU_VM_FF7_ACCOUNT) ||
++		    args->operation != AMDGPU_VA_OP_REPLACE ||
++		    args->flags & (AMDGPU_VM_DELAY_UPDATE | AMDGPU_VM_EXPLICIT_SYNC) ||
++		    adev->debug_vm)
++			return -EINVAL;
++	}
++
+ 	/* Validate operation type. */
+ 	switch (args->operation) {
+ 	case AMDGPU_VA_OP_MAP:
+@@ -921,6 +945,9 @@
+ 	amdgpu_vm_update_ctx_init(&update_ctx, adev, &fpriv->vm);
+ 	update_ctx.explicit_sync_unmap = args->flags & AMDGPU_VM_EXPLICIT_SYNC;
+ 	update_ctx.ff7_explicit_requested = update_ctx.explicit_sync_unmap;
++	if (args->flags & AMDGPU_VM_FF7_ACCOUNT)
++		update_ctx.ff7_e03_mode =
++			(args->flags & AMDGPU_VM_FF7_DIRECT_REPLACE) ? 2 : 1;
+ 
+ 	/* Add input syncobj fences (if any) for synchronization. */
+ 	r = amdgpu_gem_add_input_fence(filp, &update_ctx,
+@@ -992,7 +1019,8 @@
+ 		r = amdgpu_vm_bo_replace_map(&update_ctx, bo_va,
+ 					     args->va_address,
+ 					     args->offset_in_bo, args->map_size,
+-					     args->flags);
++					     args->flags & ~(AMDGPU_VM_FF7_ACCOUNT |
++							     AMDGPU_VM_FF7_DIRECT_REPLACE));
+ 		break;
+ 	default:
+ 		break;
+@@ -1024,6 +1052,8 @@
+ 			}
+ 		}
+ 		dma_fence_put(fence);
++		if (update_ctx.ff7_e03_error)
++			r = update_ctx.ff7_e03_error;
+ 
+ 	}
+ 
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_vm.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_vm.c
+@@ -64,6 +64,46 @@
+ 	.get = ff7_vm_explicit_stats_get,
+ };
+ module_param_cb(ff7_vm_explicit_stats, &ff7_vm_explicit_stats_ops, NULL, 0444);
++
++/* Private E03 counters: actual range invocations and submitted SDMA jobs. */
++static unsigned int ff7_vm_direct_replace = 1;
++module_param_named(ff7_vm_direct_replace, ff7_vm_direct_replace, uint, 0444);
++MODULE_PARM_DESC(ff7_vm_direct_replace, "FF7 E03 direct replacement ABI marker");
++static atomic64_t ff7_e03_ops[2], ff7_e03_ranges[2], ff7_e03_jobs[2];
++static atomic64_t ff7_e03_eliminated, ff7_e03_fallback, ff7_e03_errors;
++
++void amdgpu_vm_ff7_account_job(unsigned int mode)
++{
++	if (mode == 1 || mode == 2)
++		atomic64_inc(&ff7_e03_jobs[mode - 1]);
++}
++
++void amdgpu_vm_ff7_account_error(void)
++{
++	atomic64_inc(&ff7_e03_errors);
++}
++
++static int ff7_vm_e03_stats_get(char *buffer, const struct kernel_param *kp)
++{
++	return scnprintf(buffer, PAGE_SIZE,
++		"control_ops=%lld direct_ops=%lld control_ranges=%lld direct_ranges=%lld "
++		"control_jobs=%lld direct_jobs=%lld eliminated=%lld fallback=%lld errors=%lld\n",
++		(long long)atomic64_read(&ff7_e03_ops[0]),
++		(long long)atomic64_read(&ff7_e03_ops[1]),
++		(long long)atomic64_read(&ff7_e03_ranges[0]),
++		(long long)atomic64_read(&ff7_e03_ranges[1]),
++		(long long)atomic64_read(&ff7_e03_jobs[0]),
++		(long long)atomic64_read(&ff7_e03_jobs[1]),
++		(long long)atomic64_read(&ff7_e03_eliminated),
++		(long long)atomic64_read(&ff7_e03_fallback),
++		(long long)atomic64_read(&ff7_e03_errors));
++}
++
++static const struct kernel_param_ops ff7_vm_e03_stats_ops = {
++	.get = ff7_vm_e03_stats_get,
++};
++module_param_cb(ff7_vm_e03_stats, &ff7_vm_e03_stats_ops, NULL, 0444);
++
+ 
+ /**
+  * DOC: GPUVM
+@@ -1196,13 +1236,13 @@
+  * Returns:
+  * 0 for success, negative erro code for failure.
+  */
+-int amdgpu_vm_update_range(struct amdgpu_device *adev, struct amdgpu_vm *vm,
++static int amdgpu_vm_update_range_mode(struct amdgpu_device *adev, struct amdgpu_vm *vm,
+ 			   bool immediate, bool unlocked, bool flush_tlb,
+ 			   bool allow_override, struct amdgpu_sync *sync,
+ 			   uint64_t start, uint64_t last, uint64_t flags,
+ 			   uint64_t offset, uint64_t vram_base,
+ 			   struct ttm_resource *res, dma_addr_t *pages_addr,
+-			   struct dma_fence **fence)
++			   struct dma_fence **fence, unsigned int ff7_mode)
+ {
+ 	struct amdgpu_vm_tlb_seq_struct *tlb_cb;
+ 	struct amdgpu_vm_update_params params;
+@@ -1236,6 +1276,9 @@
+ 	params.pages_addr = pages_addr;
+ 	params.unlocked = unlocked;
+ 	params.needs_flush = flush_tlb;
++	params.ff7_e03_mode = ff7_mode;
++	if (ff7_mode == 1 || ff7_mode == 2)
++		atomic64_inc(&ff7_e03_ranges[ff7_mode - 1]);
+ 	params.override_pte = allow_override && adev->gmc.override_pte;
+ 	INIT_LIST_HEAD(&params.tlb_flush_waitlist);
+ 
+@@ -1330,6 +1373,20 @@
+ 	return r;
+ }
+ 
++int amdgpu_vm_update_range(struct amdgpu_device *adev, struct amdgpu_vm *vm,
++			   bool immediate, bool unlocked, bool flush_tlb,
++			   bool allow_override, struct amdgpu_sync *sync,
++			   uint64_t start, uint64_t last, uint64_t flags,
++			   uint64_t offset, uint64_t vram_base,
++			   struct ttm_resource *res, dma_addr_t *pages_addr,
++			   struct dma_fence **fence)
++{
++	return amdgpu_vm_update_range_mode(adev, vm, immediate, unlocked,
++					   flush_tlb, allow_override, sync, start,
++					   last, flags, offset, vram_base, res,
++					   pages_addr, fence, 0);
++}
++
+ void amdgpu_vm_get_memory(struct amdgpu_vm *vm,
+ 			  struct amdgpu_mem_stats stats[__AMDGPU_PL_NUM])
+ {
+@@ -1359,7 +1416,7 @@
+ 	struct dma_fence **last_update;
+ 	dma_addr_t *pages_addr = NULL;
+ 	struct ttm_resource *mem;
+-	bool flush_tlb = clear;
++	bool flush_tlb = clear || ctx->ff7_direct_active;
+ 	uint64_t vram_base;
+ 	uint64_t flags;
+ 	bool uncached;
+@@ -1452,12 +1509,12 @@
+ 
+ 		trace_amdgpu_vm_bo_update(mapping);
+ 
+-		r = amdgpu_vm_update_range(ctx->adev, vm, false, false,
++		r = amdgpu_vm_update_range_mode(ctx->adev, vm, false, false,
+ 					   flush_tlb, !uncached, &ctx->sync,
+ 					   mapping->start, mapping->last,
+ 					   update_flags, mapping->offset,
+ 					   vram_base, mem, pages_addr,
+-					   last_update);
++					   last_update, ctx->ff7_e03_mode);
+ 		if (r)
+ 			goto error;
+ 	}
+@@ -1648,10 +1705,10 @@
+ 					   struct amdgpu_bo_va_mapping, list);
+ 		list_del(&mapping->list);
+ 
+-		r = amdgpu_vm_update_range(ctx->adev, ctx->vm, false, false,
++		r = amdgpu_vm_update_range_mode(ctx->adev, ctx->vm, false, false,
+ 					   true, false, &ctx->sync,
+ 					   mapping->start, mapping->last, 0, 0,
+-					   0, NULL, NULL, &f);
++					   0, NULL, NULL, &f, ctx->ff7_e03_mode);
+ 		amdgpu_vm_free_mapping(ctx->adev, ctx->vm, mapping, f);
+ 		if (r) {
+ 			dma_fence_put(f);
+@@ -1667,6 +1724,78 @@
+ 	}
+ 
+ 	return r;
++}
++
++/*
++ * E03 changes only a directly requested, immediately applied REPLACE. The
++ * replacement must be the sole pending mapping of this BO and cover every
++ * freed interval. All other cases retain clear-then-map behavior.
++ *
++ * Unmap synchronization is gathered BEFORE the write. The write requests
++ * the same TLB invalidation as the omitted clear, and its fence is published
++ * to vm->last_update before releasing any old PRT references. The range
++ * writer, SDMA DONT_PIPELINE rule and page-table retirement remain unchanged.
++ */
++int amdgpu_vm_ff7_replace(struct amdgpu_vm_update_ctx *ctx,
++			  struct amdgpu_bo_va *bo_va)
++{
++	struct amdgpu_bo_va_mapping *mapping, *next, *replacement;
++	struct dma_fence *fence;
++	unsigned int eliminated = 0;
++	bool direct = ctx->ff7_e03_mode == 2;
++	int r;
++
++	if (ctx->ff7_e03_mode)
++		atomic64_inc(&ff7_e03_ops[ctx->ff7_e03_mode - 1]);
++
++	/* Narrow the first experiment to SDMA and one pending new range. */
++	direct &= ctx->vm->update_funcs == &amdgpu_vm_sdma_funcs &&
++		  !ctx->explicit_sync_unmap && !bo_va->base.moved &&
++		  !bo_va->cleared && !list_empty(&ctx->freed) &&
++		  list_is_singular(&bo_va->invalids);
++	if (direct) {
++		replacement = list_first_entry(&bo_va->invalids,
++				struct amdgpu_bo_va_mapping, list);
++		list_for_each_entry(mapping, &ctx->freed, list) {
++			if (mapping->start < replacement->start ||
++			    mapping->last > replacement->last) {
++				direct = false;
++				break;
++			}
++			++eliminated;
++		}
++	}
++
++	if (!direct) {
++		if (ctx->ff7_e03_mode == 2)
++			atomic64_inc(&ff7_e03_fallback);
++		r = amdgpu_vm_clear_freed(ctx, &ctx->vm->last_update);
++		return r ? r : amdgpu_vm_bo_update(ctx, bo_va, false);
++	}
++
++	r = amdgpu_vm_update_ctx_ensure_unmap_synced(ctx);
++	if (r)
++		return r;
++	ctx->ff7_direct_active = true;
++	r = amdgpu_vm_bo_update(ctx, bo_va, false);
++	ctx->ff7_direct_active = false;
++	if (r)
++		return r; /* freed mappings remain owned by ctx for normal recovery */
++
++	if (amdgpu_vm_is_bo_always_valid(ctx->vm, bo_va->base.bo))
++		fence = dma_fence_get(ctx->vm->last_update);
++	else
++		fence = dma_fence_get(bo_va->last_pt_update);
++	/* Retain the same VM-wide completion dependency as the old clear. */
++	dma_fence_put(ctx->vm->last_update);
++	ctx->vm->last_update = dma_fence_get(fence);
++	list_for_each_entry_safe(mapping, next, &ctx->freed, list) {
++		list_del(&mapping->list);
++		amdgpu_vm_free_mapping(ctx->adev, ctx->vm, mapping, fence);
++	}
++	dma_fence_put(fence);
++	atomic64_add(eliminated, &ff7_e03_eliminated);
++	return 0;
+ }
+ 
+ /**
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_vm.h
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_vm.h
+@@ -296,6 +296,9 @@
+ 
+ 	bool explicit_sync_unmap;
+ 	bool ff7_explicit_requested;
++	u8 ff7_e03_mode; /* 0: unchanged, 1: counted control, 2: treatment */
++	bool ff7_direct_active;
++	int ff7_e03_error;
+ };
+ 
+ /**
+@@ -343,6 +346,7 @@
+ 	 * @num_dw_left: number of dw left for the IB
+ 	 */
+ 	unsigned int num_dw_left;
++	u8 ff7_e03_mode;
+ 
+ 	/**
+ 	 * @needs_flush: true whenever we need to invalidate the TLB
+@@ -554,6 +558,10 @@
+ void amdgpu_vm_flush(struct amdgpu_ring *ring, struct amdgpu_job *job, bool need_pipe_sync);
+ int amdgpu_vm_update_pdes(struct amdgpu_device *adev,
+ 			  struct amdgpu_vm *vm, bool immediate);
++int amdgpu_vm_ff7_replace(struct amdgpu_vm_update_ctx *ctx,
++			  struct amdgpu_bo_va *bo_va);
++void amdgpu_vm_ff7_account_job(unsigned int mode);
++void amdgpu_vm_ff7_account_error(void);
+ int amdgpu_vm_clear_freed(struct amdgpu_vm_update_ctx *ctx,
+ 			  struct dma_fence **fence);
+ int amdgpu_vm_delayed_free(struct amdgpu_device *adev, struct amdgpu_vm *vm);
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_vm_sdma.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_vm_sdma.c
+@@ -121,6 +121,8 @@
+ 
+ 	WARN_ON(ib->length_dw > p->num_dw_left);
+ 	f = amdgpu_job_submit(p->job);
++	if (p->ff7_e03_mode)
++		amdgpu_vm_ff7_account_job(p->ff7_e03_mode);
+ 
+ 	if (p->unlocked) {
+ 		struct dma_fence *tmp = dma_fence_get(f);
+--- a/include/uapi/drm/amdgpu_drm.h
++++ b/include/uapi/drm/amdgpu_drm.h
+@@ -902,6 +902,9 @@
+ #define AMDGPU_VM_PAGE_NOALLOC		(1 << 9)
+ /* Bypass implicit synchronization for VM updates*/
+ #define AMDGPU_VM_EXPLICIT_SYNC		(1 << 10)
++/* Private E03 ABI. No application opts in unless both sides know this build. */
++#define AMDGPU_VM_FF7_ACCOUNT		(1 << 11)
++#define AMDGPU_VM_FF7_DIRECT_REPLACE	(1 << 12)
+ 
+ struct drm_amdgpu_gem_va {
+ 	/** GEM object handle */

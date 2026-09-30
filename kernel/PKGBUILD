@@ -1,0 +1,120 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Based on CachyOS linux-cachyos c7d6ad1ead107761d354a12d6217ddf6840cb177.
+pkgbase=linux-cachyos-sparse-vm
+pkgname=(linux-cachyos-sparse-vm linux-cachyos-sparse-vm-headers)
+pkgver=7.2.8
+pkgrel=2
+pkgdesc='CachyOS kernel with opt-in AMDGPU sparse VM improvements'
+arch=(x86_64)
+url='https://github.com/CachyOS/linux'
+license=(GPL-2.0-only)
+makedepends=(bc bison flex binutils clang llvm lld cpio gettext libelf openssl
+             pahole perl python rust rust-bindgen rust-src tar xxhash xz zlib zstd)
+options=(!strip !debug !lto)
+_srcname=cachyos-7.2.8-1
+_patches=(
+  0001-amdgpu-explicit-unmap-e01.patch
+  0002-amdgpu-direct-replace-e03.patch
+  0003-amdgpu-bounded-batch-e04.patch
+  0004-amdgpu-cross-bo-e07.patch
+  0005-amdgpu-explicit-batch-e12.patch
+  0006-amdgpu-explicit-direct-e13.patch
+  0007-amdgpu-partial-split-guard-e24.patch
+  0008-amdgpu-leaf-retention-e27.patch
+  0009-amdgpu-per-vm-opt-in.patch
+)
+source=("https://github.com/CachyOS/linux/releases/download/$_srcname/$_srcname.tar.gz"
+        config "${_patches[@]}")
+b2sums=(
+  'e9c1784d45b95872cee8a993c96659dda4174b1e42097757dcbada2f1041776a67009caefe0ed0b5af2c3d9811d0cb8f72c67b988f0aef1673ed6d38b901154b'
+  '21343697f5f1647aadbdec8a4aa477b10622e5ae04fa07fcf6f9bab67dece7180872676bdc49a90de5d273c2c13127c5812a7ca67dbd9edce3e26e8c38d358d1'
+  '35963b80a81831306c28fe9fa417130fd4a38bc2775fa3cf9c1d9eb24c6dca91f2ff50f668f139020a704d5a3508783f3a53df4f93b42f4a7f7375df6991c46b'
+  '4a7d03092c38999c2ee01d7d6ad5287c02c5666387c43d394874aaedfd960559584d4cef18e3510ff7dcede30ffb0afc6f80915d0ccfc0eb28be65c1cc87f8d1'
+  '022a82bc224afc4192eaa115addf3541a9b918f296732ee1847207e479fbfc86fb2dfaf104a09398d6d71ad9d72e217e13b32f6efd946da1f883a469a0253c48'
+  'f9a90ad61bef93f96f6573f1cef7c433e697e9d61b07167c88f3f72a9b5812da1a18a6e03d4f9869d4487f8992b1ebd1685c5ebb88ec88e8b82833d4060b1cf4'
+  '715dbe8d04c924f34bfb6b1fd788a261804f42576e8c8ad6f72ffdba2277dacceda35fae3b6059eb3104eb7113450fdb45fd3d0136676d362b8bc34ffc1447ed'
+  '756063b8fc9b2e41ca2317e49217a39bbfd9b1ee9f5bc9eeef73e0f3cf2bf26e0898f6f56a0102ab11d02e888bf4178628da7a8f113763df9c70be4cd49c9c00'
+  'fa66c8ee5ec9556fcb2f2018542aeb64004282b5e8473e081c7ec8d10a444568b817c2df9e6e4e7930e85341178e5c7be443599b0bcb0094b4e17d56b805d97b'
+  '2220a6ca3a071098abfbdf43c4de3aee00b6188bfba2371f60a4b946d49a9d602118d9763f4133a5240bed42dbe9e385f53d6030e37ae1dea0a0f01db3764274'
+  'bb9aaff7c1dbc9fb460c025f7a44d14e1bab0a409e3b6bd88d967920d5dc91f4dd0d1e62c3e255ff902f3d514c467fe045442604169d87d8fa7cc5fb1788d19c'
+)
+export KBUILD_BUILD_USER=sparse-vm
+export KBUILD_BUILD_HOST=arch
+
+prepare() {
+  cd "$_srcname"
+  local patch
+  for patch in "${_patches[@]}"; do
+    patch --batch --forward --fuzz=0 -Np1 -i "$srcdir/$patch"
+  done
+  cp "$srcdir/config" .config
+  printf '%s\n' "-$pkgrel" > localversion.10-pkgrel
+  printf '%s\n' '-cachyos-sparse-vm' > localversion.20-pkgname
+  scripts/config --set-str LOCALVERSION '' --disable LOCALVERSION_AUTO
+  scripts/config --disable AUTOFDO_CLANG --disable PROPELLER_CLANG
+  make LLVM=1 olddefconfig
+  make -s LLVM=1 kernelrelease > version
+  [[ $(<version) == "$pkgver-$pkgrel-cachyos-sparse-vm" ]]
+}
+
+build() {
+  cd "$_srcname"
+  make LLVM=1 all
+}
+
+package_linux-cachyos-sparse-vm() {
+  depends=(coreutils kmod initramfs)
+  optdepends=('linux-firmware: firmware for supported devices'
+              'wireless-regdb: wireless regulatory database')
+  provides=(VIRTUALBOX-GUEST-MODULES WIREGUARD-MODULE NTSYNC-MODULE)
+  cd "$_srcname"
+  local modulesdir="$pkgdir/usr/lib/modules/$(<version)"
+  install -Dm644 "$(make -s LLVM=1 image_name)" "$modulesdir/vmlinuz"
+  printf '%s\n' "$pkgbase" | install -Dm644 /dev/stdin "$modulesdir/pkgbase"
+  install -Dm644 .config "$modulesdir/config"
+  ZSTD_CLEVEL=10 make LLVM=1 INSTALL_MOD_PATH="$pkgdir/usr" INSTALL_MOD_STRIP=1 \
+    DEPMOD=/doesnt/exist modules_install
+  rm -f "$modulesdir/build" "$modulesdir/source"
+}
+
+package_linux-cachyos-sparse-vm-headers() {
+  pkgdesc='Headers and scripts for the sparse VM kernel'
+  depends=("linux-cachyos-sparse-vm=$pkgver-$pkgrel" binutils glibc libelf
+           libgcc openssl pahole xxhash zlib zstd clang llvm lld)
+  provides=(LINUX-HEADERS)
+  cd "$_srcname"
+  local builddir="$pkgdir/usr/lib/modules/$(<version)/build"
+  install -Dt "$builddir" -m644 .config Makefile Module.symvers System.map \
+    localversion.* version vmlinux
+  install -Dt "$builddir/kernel" -m644 kernel/Makefile
+  install -Dt "$builddir/arch/x86" -m644 arch/x86/Makefile
+  cp -a scripts include "$builddir/"
+  cp -a arch/x86/include "$builddir/arch/x86/"
+  install -Dt "$builddir/arch/x86/kernel" -m644 arch/x86/kernel/asm-offsets.s
+  install -Dt "$builddir/tools/objtool" tools/objtool/objtool
+  if [[ -f tools/bpf/resolve_btfids/resolve_btfids ]]; then
+    install -Dt "$builddir/tools/bpf/resolve_btfids" tools/bpf/resolve_btfids/resolve_btfids
+  fi
+  if [[ -f tools/bpf/bpftool/vmlinux.h ]]; then
+    install -Dt "$builddir/tools/bpf/bpftool" -m644 tools/bpf/bpftool/vmlinux.h
+  fi
+  install -Dt "$builddir/drivers/md" -m644 drivers/md/*.h
+  install -Dt "$builddir/net/mac80211" -m644 net/mac80211/*.h
+  install -Dt "$builddir/drivers/media/i2c" -m644 drivers/media/i2c/msp3400-driver.h
+  install -Dt "$builddir/drivers/media/usb/dvb-usb" -m644 drivers/media/usb/dvb-usb/*.h
+  install -Dt "$builddir/drivers/media/dvb-frontends" -m644 drivers/media/dvb-frontends/*.h
+  install -Dt "$builddir/drivers/media/tuners" -m644 drivers/media/tuners/*.h
+  install -Dt "$builddir/drivers/iio/common/hid-sensors" -m644 drivers/iio/common/hid-sensors/*.h
+  find . -name 'Kconfig*' -exec install -Dm644 '{}' "$builddir/{}" \;
+  if compgen -G 'rust/*.rmeta' > /dev/null; then
+    install -Dt "$builddir/rust" -m644 rust/*.rmeta
+  fi
+  if compgen -G 'rust/*.so' > /dev/null; then
+    install -Dt "$builddir/rust" rust/*.so
+  fi
+  make LLVM=1 INSTALL_MOD_PATH="$pkgdir/usr" vdso_install link=
+  find -L "$builddir" -type l -delete
+  find "$builddir" -type f -name '*.o' -delete
+  mkdir -p "$pkgdir/usr/src"
+  ln -sr "$builddir" "$pkgdir/usr/src/$pkgbase"
+}

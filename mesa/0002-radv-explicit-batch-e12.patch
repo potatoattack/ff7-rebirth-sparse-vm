@@ -1,0 +1,144 @@
+Subject: [E12] honor sparse waits before opting in to explicit unmaps
+
+--- a/src/amd/vulkan/radv_queue.c
++++ b/src/amd/vulkan/radv_queue.c
+@@ -185,7 +185,8 @@
+ }
+ 
+ static VkResult
+-radv_queue_submit_bind_sparse_memory(struct radv_device *device, struct vk_queue_submit *submission)
++radv_queue_submit_bind_sparse_memory(struct radv_device *device, struct vk_queue_submit *submission,
++                                     bool allow_explicit)
+ {
+    if (!submission->buffer_bind_count && !submission->image_opaque_bind_count && !submission->image_bind_count)
+       return VK_SUCCESS;
+@@ -193,8 +194,22 @@
+    struct radeon_winsys *ws = device->ws;
+    void *batch = NULL;
+    VkResult result = VK_SUCCESS;
++   /* E12 is restricted to the hardware-queue path below. Before dropping
++    * VM-wide implicit application fences, complete the application's actual
++    * sparse waits. The runtime has already unwrapped semaphore payloads and
++    * handles wait-before-signal through its pending/submit-thread mechanism.
++    * Do not reset or consume these payloads here; normal submission handling
++    * still owns waits/signals and the completion fence.
++    */
++   bool explicit_unmap = allow_explicit && ws->ff7_explicit_unmap;
++   if (explicit_unmap) {
++      result = vk_sync_wait_many(&device->vk, submission->wait_count,
++                                 submission->waits, 0, UINT64_MAX);
++      if (result != VK_SUCCESS)
++         return result;
++   }
+    if (ws->sparse_bind_begin) {
+-      result = ws->sparse_bind_begin(ws, &batch);
++      result = ws->sparse_bind_begin(ws, explicit_unmap, &batch);
+       if (result != VK_SUCCESS)
+          return result;
+    }
+@@ -1885,7 +1900,7 @@
+    struct radv_device *device = radv_queue_device(queue);
+    VkResult result;
+ 
+-   result = radv_queue_submit_bind_sparse_memory(device, submission);
++   result = radv_queue_submit_bind_sparse_memory(device, submission, false);
+    if (result != VK_SUCCESS)
+       goto fail;
+ 
+@@ -1925,7 +1940,7 @@
+    struct radv_queue *queue = (struct radv_queue *)vqueue;
+    struct radv_device *device = radv_queue_device(queue);
+ 
+-   VkResult result = radv_queue_submit_bind_sparse_memory(device, submission);
++   VkResult result = radv_queue_submit_bind_sparse_memory(device, submission, true);
+    if (result != VK_SUCCESS)
+       goto fail;
+ 
+--- a/src/amd/vulkan/radv_radeon_winsys.h
++++ b/src/amd/vulkan/radv_radeon_winsys.h
+@@ -258,7 +258,8 @@
+    void (*buffer_get_metadata)(struct radeon_winsys *ws, struct radeon_winsys_bo *bo, struct radeon_bo_metadata *md);
+ 
+    /* Optional per-submission context. End must flush before queue completion. */
+-   VkResult (*sparse_bind_begin)(struct radeon_winsys *ws, void **batch);
++   bool ff7_explicit_unmap;
++   VkResult (*sparse_bind_begin)(struct radeon_winsys *ws, bool explicit_unmap, void **batch);
+    VkResult (*sparse_bind_end)(struct radeon_winsys *ws, void *batch, bool abort);
+ 
+    VkResult (*buffer_virtual_bind)(struct radeon_winsys *ws, struct radeon_winsys_bo *parent, uint64_t offset,
+--- a/src/amd/vulkan/winsys/amdgpu/ff7_vm_batch.h
++++ b/src/amd/vulkan/winsys/amdgpu/ff7_vm_batch.h
+@@ -24,6 +24,7 @@
+    enum ff7_vm_mode mode;
+    unsigned count;
+    bool split_rejected;
++   bool explicit_unmap;
+    int error;
+    ff7_vm_send send;
+    void *user;
+@@ -46,6 +47,8 @@
+ {
+    struct drm_amdgpu_gem_va va = *entry;
+    va.flags |= FF7_VM_ACCOUNT;
++   if (b->explicit_unmap)
++      va.flags |= FF7_VM_EXPLICIT;
+    if (b->mode != FF7_VM_BASELINE)
+       va.flags |= FF7_VM_DIRECT;
+    ++b->stats.scalar;
+@@ -66,6 +69,7 @@
+ {
+    struct drm_amdgpu_gem_va header = {
+       .handle = entries[0].handle, .operation = FF7_VM_BATCH_OP,
++      .flags = b->explicit_unmap ? FF7_VM_EXPLICIT : 0,
+       .va_address = (uint64_t)(uintptr_t)entries, .offset_in_bo = count,
+    };
+    ++b->stats.batch_attempts;
+--- a/src/amd/vulkan/winsys/amdgpu/radv_amdgpu_bo.c
++++ b/src/amd/vulkan/winsys/amdgpu/radv_amdgpu_bo.c
+@@ -68,6 +68,29 @@
+    ws->ff7_split_rejected = split && !strcmp(split, "1");
+    if (ws->ff7_split_rejected && ws->ff7_vm_mode != FF7_VM_BATCH_MODE)
+       return false;
++   const char *explicit_mode = getenv("RADV_FF7_EXPLICIT_UNMAP");
++   if (explicit_mode && strcmp(explicit_mode, "0") && strcmp(explicit_mode, "1")) {
++      fprintf(stderr, "FF7_E12: explicit mode must be 0 or 1.\n");
++      return false;
++   }
++   ws->base.ff7_explicit_unmap = explicit_mode && !strcmp(explicit_mode, "1");
++   if (ws->base.ff7_explicit_unmap) {
++      if (ws->ff7_vm_mode != FF7_VM_BATCH_MODE || ws->ff7_split_rejected)
++         return false;
++      memset(marker, 0, sizeof(marker));
++      f = fopen("/sys/module/amdgpu/parameters/ff7_vm_batch_explicit_api", "r");
++      if (f) {
++         if (!fgets(marker, sizeof(marker), f))
++            marker[0] = 0;
++         fclose(f);
++      }
++      if (strcmp(marker, "1\n")) {
++         fprintf(stderr, "FF7_E12: explicit batching kernel API is missing.\n");
++         return false;
++      }
++   }
++   fprintf(stderr, "FF7_E12_RADV_v1: explicit_unmap=%u dedicated_sparse=implicit\n",
++           ws->base.ff7_explicit_unmap);
+    fprintf(stderr, "FF7_E09_RADV_v1: pid=%ld mode=%s split_rejected=%u device=0x744c max_entries=16\n",
+            (long)getpid(), mode, ws->ff7_split_rejected);
+    return true;
+@@ -81,7 +104,7 @@
+ }
+ 
+ static VkResult
+-radv_amdgpu_sparse_begin(struct radeon_winsys *rws, void **context)
++radv_amdgpu_sparse_begin(struct radeon_winsys *rws, bool explicit_unmap, void **context)
+ {
+    struct radv_amdgpu_winsys *ws = radv_amdgpu_winsys(rws);
+    *context = NULL;
+@@ -92,6 +115,7 @@
+       return VK_ERROR_OUT_OF_HOST_MEMORY;
+    batch->mode = ws->ff7_vm_mode;
+    batch->split_rejected = ws->ff7_split_rejected;
++   batch->explicit_unmap = explicit_unmap && rws->ff7_explicit_unmap;
+    batch->send = radv_amdgpu_ff7_send;
+    batch->user = ws;
+    *context = batch;

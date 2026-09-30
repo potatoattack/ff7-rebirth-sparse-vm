@@ -1,0 +1,10 @@
+This repository contains components under different licenses:
+
+* Kernel patches and the kernel PKGBUILD: GPL-2.0-only.
+* Mesa/RADV patches, native tests, new test glue, documentation and Mesa
+  PKGBUILD: MIT, unless a file states otherwise.
+* The pinned kernel configuration and references retain their upstream terms.
+
+See LICENSES/ and the existing notices in each source or patch. In particular,
+retain the attribution to Natalie Vock in kernel patch 0001 and provenance.md.
+This notice does not replace any existing upstream copyright or license notice.

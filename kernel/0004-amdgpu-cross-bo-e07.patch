@@ -1,0 +1,202 @@
+From: FF7 local performance investigation
+Subject: [EXPERIMENT E07] drm/amdgpu: batch exact replacements across stable VRAM BOs
+
+Apply after E01/E03/E04 to pinned CachyOS 7.2.8-1. Default mode remains the
+E04 narrow behavior. Runtime ff7_vm_cross_bo=1 extends only operation 0xf704
+when old and new VRAM BOs share the locked VM reservation, both are stable,
+and the old mapping is exactly the requested 64 KiB with an existing leaf.
+PRT and non-exact ranges still fall back before mutation. No changed UAPI,
+IB size, batch bound, implicit dependencies, TLB retirement or GPU waits.
+Read the mode once per operation; ordinary applications do not opt in.
+Hardware correctness/performance require the supplied new two-BO gate.
+
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_gem.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_gem.c
+@@ -844,7 +844,72 @@
+ 	return dma_fence_get(ctx->vm->last_update);
+ }
+ 
+-/* Private E04 ABI; only existing same-BO 64 KiB VRAM replacements. */
++/* E07 changes only the private E04 operation. Read once per vector. */
++static unsigned int ff7_vm_cross_bo;
++static unsigned int ff7_vm_cross_bo_api = 1;
++static int ff7_vm_cross_bo_set(const char *val, const struct kernel_param *kp)
++{
++	unsigned int mode;
++	int r = kstrtouint(val, 0, &mode);
++
++	if (r || mode > 1)
++		return r ?: -EINVAL;
++	WRITE_ONCE(*(unsigned int *)kp->arg, mode);
++	return 0;
++}
++static const struct kernel_param_ops ff7_vm_cross_bo_ops = {
++	.set = ff7_vm_cross_bo_set,
++	.get = param_get_uint,
++};
++module_param_cb(ff7_vm_cross_bo, &ff7_vm_cross_bo_ops, &ff7_vm_cross_bo, 0644);
++module_param_named(ff7_vm_cross_bo_api, ff7_vm_cross_bo_api, uint, 0444);
++
++/* First unsupported condition only. Entries after that are not inspected. */
++enum ff7_e07_reason {
++	FF7_E07_ACCEPTED, FF7_E07_OTHER_BO, FF7_E07_SHAPE, FF7_E07_SOURCE,
++	FF7_E07_LEAF, FF7_E07_TARGET, FF7_E07_MISSING, FF7_E07_ERROR,
++	FF7_E07_REASONS
++};
++static atomic64_t ff7_e07_reasons[FF7_E07_REASONS];
++static atomic64_t ff7_e07_cross_entries;
++static int ff7_vm_e07_stats_get(char *buffer, const struct kernel_param *kp)
++{
++	return scnprintf(buffer, PAGE_SIZE,
++		"accepted=%lld other_bo=%lld shape=%lld source=%lld leaf=%lld target=%lld missing=%lld errors=%lld cross_entries=%lld\n",
++		(long long)atomic64_read(&ff7_e07_reasons[FF7_E07_ACCEPTED]),
++		(long long)atomic64_read(&ff7_e07_reasons[FF7_E07_OTHER_BO]),
++		(long long)atomic64_read(&ff7_e07_reasons[FF7_E07_SHAPE]),
++		(long long)atomic64_read(&ff7_e07_reasons[FF7_E07_SOURCE]),
++		(long long)atomic64_read(&ff7_e07_reasons[FF7_E07_LEAF]),
++		(long long)atomic64_read(&ff7_e07_reasons[FF7_E07_TARGET]),
++		(long long)atomic64_read(&ff7_e07_reasons[FF7_E07_MISSING]),
++		(long long)atomic64_read(&ff7_e07_reasons[FF7_E07_ERROR]),
++		(long long)atomic64_read(&ff7_e07_cross_entries));
++}
++static const struct kernel_param_ops ff7_vm_e07_stats_ops = {
++	.get = ff7_vm_e07_stats_get,
++};
++module_param_cb(ff7_vm_e07_stats, &ff7_vm_e07_stats_ops, NULL, 0444);
++
++/* The shared reservation is already held through amdgpu_vm_lock_pd().
++ * Reject other reservation owners before reading their placement/state.
++ * Retain E04's stable VRAM restrictions for both the old and target BO.
++ */
++static bool amdgpu_gem_ff7_old_bo_eligible(struct amdgpu_vm *vm,
++					struct amdgpu_bo_va *old)
++{
++	struct amdgpu_bo *bo = old->base.bo;
++
++	if (!amdgpu_vm_is_bo_always_valid(vm, bo))
++		return false;
++	dma_resv_assert_held(bo->tbo.base.resv);
++	return !old->base.moved && !old->cleared && !old->is_xgmi &&
++		!old->userq_va_mapped && list_empty(&old->invalids) &&
++		bo->tbo.resource && bo->tbo.resource->mem_type == TTM_PL_VRAM &&
++		!amdgpu_bo_encrypted(bo);
++}
++
++/* E04 ABI; E07 optionally admits exact cross-BO 64 KiB replacements. */
+ static int amdgpu_gem_ff7_batch_ioctl(struct drm_device *dev,
+ 		struct drm_amdgpu_gem_va *header, struct drm_file *filp)
+ {
+@@ -859,7 +924,9 @@
+ 	struct amdgpu_bo_va *bo_va;
+ 	struct amdgpu_vm_update_ctx ctx;
+ 	struct drm_exec exec;
+-	unsigned int count, i, j;
++	unsigned int count, i, j, cross_entries = 0;
++	enum ff7_e07_reason reason = FF7_E07_ACCEPTED;
++	bool cross_bo = READ_ONCE(ff7_vm_cross_bo);
+ 	u64 end, vm_size;
+ 	int r = 0;
+ 
+@@ -926,6 +993,7 @@
+ 	    !list_empty(&bo_va->invalids) || !bo->tbo.resource ||
+ 	    bo->tbo.resource->mem_type != TTM_PL_VRAM ||
+ 	    amdgpu_bo_encrypted(bo)) {
++		reason = FF7_E07_TARGET;
+ 		r = -EOPNOTSUPP;
+ 		goto unlock;
+ 	}
+@@ -939,10 +1007,32 @@
+ 			goto unlock;
+ 		}
+ 		old = amdgpu_vm_bo_lookup_mapping(vm, start);
+-		if (!old || old->bo_va != bo_va || old->start != start ||
++		if (!old) {
++			reason = FF7_E07_MISSING;
++			goto unsupported;
++		}
++		if (old->bo_va != bo_va && !cross_bo) {
++			reason = FF7_E07_OTHER_BO;
++			goto unsupported;
++		}
++		if (old->start != start ||
+ 		    old->last != start + SZ_64K / AMDGPU_GPU_PAGE_SIZE - 1) {
+-			r = -EOPNOTSUPP;
+-			goto unlock;
++			reason = FF7_E07_SHAPE;
++			goto unsupported;
++		}
++		if (old->bo_va != bo_va) {
++			/* PRT, split ranges and independent reservation owners remain
++			 * on the existing scalar path in this experiment. */
++			if ((old->flags & AMDGPU_VM_PAGE_PRT) || !old->bo_va ||
++			    !amdgpu_gem_ff7_old_bo_eligible(vm, old->bo_va)) {
++				reason = FF7_E07_SOURCE;
++				goto unsupported;
++			}
++			if (!amdgpu_vm_ff7_has_64k_leaf(adev, vm, start)) {
++				reason = FF7_E07_LEAF;
++				goto unsupported;
++			}
++			++cross_entries;
+ 		}
+ 	}
+ 	for (i = 0; i < count; ++i) {
+@@ -955,11 +1045,20 @@
+ 	r = amdgpu_vm_ff7_batch_replace(&ctx, bo_va);
+ 	if (!r)
+ 		r = amdgpu_vm_update_pdes(adev, vm, false);
++	goto unlock;
++unsupported:
++	/* Every path here precedes the first CPU mapping mutation. */
++	r = -EOPNOTSUPP;
+ unlock:
+ 	amdgpu_vm_update_ctx_fini(&ctx);
+ 	drm_exec_fini(&exec);
+ 	drm_gem_object_put(gobj);
+ free_entries:
++	if (r && r != -EOPNOTSUPP)
++		reason = FF7_E07_ERROR;
++	atomic64_inc(&ff7_e07_reasons[reason]);
++	if (!r)
++		atomic64_add(cross_entries, &ff7_e07_cross_entries);
+ 	amdgpu_vm_ff7_batch_note(count, r);
+ 	kfree(entries);
+ 	return r;
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_vm_pt.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_vm_pt.c
+@@ -192,6 +192,24 @@
+ 	cursor->parent = cursor->entry;
+ 	cursor->entry = &to_amdgpu_bo_vm(cursor->entry->bo)->entries[idx];
+ 	return true;
++}
++
++/* E07 preflight: no allocation, eviction, emission or hierarchy changes.
++ * An aligned 64 KiB interval fits in one leaf when block_size > 4. */
++bool amdgpu_vm_ff7_has_64k_leaf(struct amdgpu_device *adev,
++			      struct amdgpu_vm *vm, uint64_t start)
++{
++	struct amdgpu_vm_pt_cursor cursor;
++
++	dma_resv_assert_held(vm->root.bo->tbo.base.resv);
++	if ((start & 15) || adev->vm_manager.block_size <= 4)
++		return false;
++	amdgpu_vm_pt_start(adev, vm, start, &cursor);
++	while (cursor.level != AMDGPU_VM_PTB) {
++		if (!amdgpu_vm_pt_descendant(adev, &cursor))
++			return false;
++	}
++	return cursor.entry && cursor.entry->bo;
+ }
+ 
+ /**
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_vm.h
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_vm.h
+@@ -676,6 +676,8 @@
+ int amdgpu_vm_pt_map_tables(struct amdgpu_device *adev, struct amdgpu_vm *vm);
+ 
+ bool amdgpu_vm_is_bo_always_valid(struct amdgpu_vm *vm, struct amdgpu_bo *bo);
++bool amdgpu_vm_ff7_has_64k_leaf(struct amdgpu_device *adev,
++			      struct amdgpu_vm *vm, uint64_t start);
+ 
+ void amdgpu_vm_update_ctx_add_freed_mapping(
+ 	struct amdgpu_vm_update_ctx *ctx, struct amdgpu_bo_va *bo_va,

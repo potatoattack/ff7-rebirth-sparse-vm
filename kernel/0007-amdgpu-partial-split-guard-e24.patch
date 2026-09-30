@@ -1,0 +1,123 @@
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_vm.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_vm.c
+@@ -2487,6 +2487,61 @@
+ 	return 0;
+ }
+ 
++/* E24: partial huge-mapping splits can temporarily remove translations for
++ * neighbours that the API did not ask to change. The E23 fault was in one of
++ * those neighbours. Retain normal VM-wide ordering for this case until the
++ * hierarchy can be split without exposing an incompletely populated table.
++ *
++ * Existing leaf-only updates and E07's separately validated batches retain
++ * their explicit path. This is a conservative guard, not an atomic split.
++ */
++static unsigned int ff7_vm_split_guard_api = 1;
++module_param_named(ff7_vm_split_guard_api, ff7_vm_split_guard_api, uint, 0444);
++static atomic64_t ff7_e24_checked, ff7_e24_kept, ff7_e24_guarded;
++static int ff7_vm_e24_stats_get(char *buffer, const struct kernel_param *kp)
++{
++	return scnprintf(buffer, PAGE_SIZE, "checked=%lld kept=%lld guarded=%lld\n",
++		(long long)atomic64_read(&ff7_e24_checked),
++		(long long)atomic64_read(&ff7_e24_kept),
++		(long long)atomic64_read(&ff7_e24_guarded));
++}
++static const struct kernel_param_ops ff7_vm_e24_stats_ops = {
++	.get = ff7_vm_e24_stats_get,
++};
++module_param_cb(ff7_vm_e24_stats, &ff7_vm_e24_stats_ops, NULL, 0444);
++
++static void amdgpu_vm_ff7_guard_partial_split(struct amdgpu_vm_update_ctx *ctx,
++                                            uint64_t start, uint64_t last)
++{
++	struct amdgpu_bo_va_mapping *mapping;
++
++	if (!ctx->ff7_explicit_requested || !ctx->explicit_sync_unmap)
++		return;
++
++	dma_resv_assert_held(ctx->vm->root.bo->tbo.base.resv);
++	atomic64_inc(&ff7_e24_checked);
++	for (mapping = amdgpu_vm_it_iter_first(&ctx->vm->va, start, last);
++	     mapping;
++	     mapping = amdgpu_vm_it_iter_next(mapping, start, last)) {
++		/* Only the two cut boundaries can share a hierarchy entry with
++		 * a surviving part of this mapping. No unbounded page scan.
++		 */
++		if ((mapping->start < start &&
++		     !amdgpu_vm_ff7_has_leaf(ctx->adev, ctx->vm, start)) ||
++		    (mapping->last > last &&
++		     !amdgpu_vm_ff7_has_leaf(ctx->adev, ctx->vm, last))) {
++			ctx->explicit_sync_unmap = false;
++			/* Gather the stronger dependency even if a caller had already
++			 * prepared an explicit-only sync set. Never discard fences.
++			 */
++			ctx->unmap_synced = false;
++			atomic64_inc(&ff7_e24_guarded);
++			return;
++		}
++	}
++	atomic64_inc(&ff7_e24_kept);
++}
++
+ /**
+  * amdgpu_vm_bo_clear_mappings - remove all mappings in a specific range
+  *
+@@ -2514,6 +2569,9 @@
+ 
+ 	saddr /= AMDGPU_GPU_PAGE_SIZE;
+ 	eaddr = saddr + (size - 1) / AMDGPU_GPU_PAGE_SIZE;
++
++	/* Decide before modifying the old intervals or emitting GPU work. */
++	amdgpu_vm_ff7_guard_partial_split(ctx, saddr, eaddr);
+ 
+ 	/* Allocate all the needed memory */
+ 	before = kzalloc_obj(*before);
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_vm.h
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_vm.h
+@@ -676,6 +676,8 @@
+ int amdgpu_vm_pt_map_tables(struct amdgpu_device *adev, struct amdgpu_vm *vm);
+ 
+ bool amdgpu_vm_is_bo_always_valid(struct amdgpu_vm *vm, struct amdgpu_bo *bo);
++bool amdgpu_vm_ff7_has_leaf(struct amdgpu_device *adev,
++                          struct amdgpu_vm *vm, uint64_t start);
+ bool amdgpu_vm_ff7_has_64k_leaf(struct amdgpu_device *adev,
+ 			      struct amdgpu_vm *vm, uint64_t start);
+ 
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_vm_pt.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_vm_pt.c
+@@ -194,22 +194,29 @@
+ 	return true;
+ }
+ 
+-/* E07 preflight: no allocation, eviction, emission or hierarchy changes.
+- * An aligned 64 KiB interval fits in one leaf when block_size > 4. */
+-bool amdgpu_vm_ff7_has_64k_leaf(struct amdgpu_device *adev,
+-			      struct amdgpu_vm *vm, uint64_t start)
++/* Read only: caller holds the VM root reservation. A missing PTB means
++ * updating a subrange may have to replace a huge-page PDE with a new table. */
++bool amdgpu_vm_ff7_has_leaf(struct amdgpu_device *adev,
++                          struct amdgpu_vm *vm, uint64_t start)
+ {
+ 	struct amdgpu_vm_pt_cursor cursor;
+ 
+ 	dma_resv_assert_held(vm->root.bo->tbo.base.resv);
+-	if ((start & 15) || adev->vm_manager.block_size <= 4)
+-		return false;
+ 	amdgpu_vm_pt_start(adev, vm, start, &cursor);
+ 	while (cursor.level != AMDGPU_VM_PTB) {
+ 		if (!amdgpu_vm_pt_descendant(adev, &cursor))
+ 			return false;
+ 	}
+ 	return cursor.entry && cursor.entry->bo;
++}
++
++/* E07's exact 64 KiB eligibility is unchanged. */
++bool amdgpu_vm_ff7_has_64k_leaf(struct amdgpu_device *adev,
++                              struct amdgpu_vm *vm, uint64_t start)
++{
++	if ((start & 15) || adev->vm_manager.block_size <= 4)
++		return false;
++	return amdgpu_vm_ff7_has_leaf(adev, vm, start);
+ }
+ 
+ /**
