@@ -70,7 +70,7 @@
     "Reported output resolution differs from saved window height; no live render extent or settings screenshot in these archives.",
     "Manual camera motion; no deterministic replay or time alignment. No inferential confidence interval from three runs per mode.",
     "Only selected graphics environment fields and loaded binaries were collected; exact Proton package version and frame-generation state were not independently captured.",
-    "Five new CrashReportClient configuration entries appeared between runs, after both feature states. Reports themselves and kernel fault logs were not captured; cause and timing are unknown.",
+    "Five new CrashReportClient configuration entries appeared between runs, after both feature states. These entries alone do not establish a gameplay crash. The tester noticed no crashes or gameplay interruptions; the reports and kernel fault logs were not captured, so the entries' cause is unknown.",
     "Completed capture windows establish short gameplay operation, not clean shutdown, native-test coverage, long-term stability or other-GPU support."
   ],
   "data_reduction": "Retains every original elapsed/frametime decimal string in original order; removes unrelated CSV columns and metadata. No trimming, smoothing or outlier rejection.",
@@ -243,5 +243,9 @@
         "over_33_333_ms_per_minute": 1.500162637507061
       }
     }
-  ]
+  ],
+  "tester_follow_up": {
+    "date": "2026-09-30",
+    "observation": "The tester reported no noticed crashes or gameplay interruptions during these benchmark runs."
+  }
 }

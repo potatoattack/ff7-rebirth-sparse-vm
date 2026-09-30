@@ -43,9 +43,11 @@ operation with the new interface. It does not audit the full Arch build or
 bootloader hooks; those logs were not supplied.
 
 The median per-run P99 frame time fell from 38.47 to 27.50 ms. All measured
-windows completed, but five new crash-report-client configuration entries
-appeared between runs, after both off and on states. Their reports and kernel
-fault logs are absent, so clean shutdown and stability are not established.
+windows completed, and the tester subsequently reported no noticed crashes or
+gameplay interruptions. Five new crash-report-client configuration entries
+appeared between runs, after both off and on states. These entries alone do
+not establish a gameplay crash; their cause is unknown without the reports.
+Long-term stability and shutdown behaviour remain unverified.
 No new packaged native GPU results accompanied these captures; historical E22
 and E28 native results are not silently transferred to the public interface.
 

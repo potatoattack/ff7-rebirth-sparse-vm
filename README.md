@@ -50,10 +50,10 @@ Reported settings were 3840×2160 output, 100% scaling, high textures and
 Native Wine Wayland and HDR were enabled. Manual rotations are not
 camera-aligned, and MangoHud does not measure physical panel scanout.
 
-These results cover one scene and one GPU. New crash-report entries appeared
-between runs, so completed captures are not evidence of clean shutdown or
-long-term stability. See the [full results, settings, source data and reproduction
-command](benchmarks/results/2026-09-30-rx7900xtx/README.md).
+All six captures completed, and the tester reported no noticed crashes or
+gameplay interruptions. These results cover one scene and one GPU; long-term
+stability remains unverified. See the [full results, settings, source data and
+reproduction command](benchmarks/results/2026-09-30-rx7900xtx/README.md).
 
 ## Requirements and scope
 

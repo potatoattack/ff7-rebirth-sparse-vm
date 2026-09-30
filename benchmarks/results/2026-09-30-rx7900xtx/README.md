@@ -78,12 +78,13 @@ not confidence intervals. The feature still has some long frames; these
 measurements do not establish stutter-free play, performance on other GPUs,
 or the effect of removing the retained INI overrides.
 
-**Stability remains a separate question.** Five new `CrashReportClient`
-configuration entries appeared between the six captures, following both off
-and on runs. The reports themselves and kernel fault logs are not in these
-archives, so their timing and cause are unknown. Every measured window
-completed, but this does not establish clean game shutdown, long-term stability
-or a passed native GPU test suite for the public package.
+All six measured windows completed. In a follow-up, the tester reported no
+noticed crashes or gameplay interruptions during these runs. Five new
+`CrashReportClient` configuration entries appeared between captures, following
+both off and on runs. Those entries alone do not establish a gameplay crash;
+the reports themselves and kernel fault logs are absent, so their cause is
+unknown. These short captures do not establish long-term stability, verify
+shutdown behaviour or replace the public package's native GPU tests.
 
 ## Reproduce the figures
 

@@ -133,7 +133,7 @@
     "activation_only_in_on_runs": true,
     "same_recorded_binary_hashes": true,
     "same_saved_gameplay_settings": true,
-    "stability": "Unknown beyond completed measurement windows. Five additional crash-report-client configuration entries appeared between captures after both modes; reports and kernel fault logs not supplied.",
+    "stability": "All measured windows completed, and the tester subsequently reported no noticed crashes or gameplay interruptions. Five additional crash-report-client configuration entries appeared between captures after both modes; they do not establish a gameplay crash. Reports and kernel fault logs were not supplied; long-term stability and shutdown behaviour remain unverified.",
     "packaged_native_gpu_tests": "Not supplied",
     "other_gpu_models": "Not tested",
     "full_arch_build_logs": "Not supplied"

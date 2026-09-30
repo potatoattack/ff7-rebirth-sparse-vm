@@ -77,9 +77,11 @@ the split guard, old-backing lifetime, move dependencies and TLB ordering.
 
 These facts justify opening other eligible discrete AMD GPUs to experimental
 testing. They do not prove hardware correctness or game smoothness. Only the
-RX 7900 XTX has original E28 gameplay evidence, and public per-VM activation
-still needs hardware validation. Other families need native data/ordering and
-overlap results plus gameplay. APUs and virtual devices need separate work.
+RX 7900 XTX has original E28 gameplay evidence and completed public-package
+off/on captures confirming per-VM activation. The packaged native GPU suite
+and long-term stability remain unverified. Other families need native
+data/ordering and overlap results plus gameplay. APUs and virtual devices
+need separate work.
 
 Read-only kernel counters are system-wide. They attribute work but cannot prove
 which process caused a change when multiple opted-in applications run. Developer
