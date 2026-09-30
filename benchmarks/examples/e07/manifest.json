@@ -1,0 +1,24 @@
+{
+  "title": "Historical experiment: cross-allocation batching",
+  "subtitle": "RX 7900 XTX \u00b7 uncapped \u00b7 40 s per run \u00b7 one sequential pair",
+  "duration_s": 40,
+  "notes": "E07 component comparison, not unpatched versus final. Same process and saved settings; manually rotated camera. No uncapped reversal. User-reported 50% scaling; live internal dimensions were not measured. See README.md.",
+  "runs": [
+    {
+      "group": "Same-allocation batching",
+      "label": "Narrow: existing batching",
+      "csv": "narrow.csv",
+      "source_archive": "e07-capture-narrow-688979dd.tar.gz",
+      "source_archive_sha256": "35e279c1784fc020128445160b6ccb0af4f314f90930f0b710eaca636e492eb9",
+      "source_csv_sha256": "43f28887f32bb9b56c8d67169f0f6b069f40cd2cb693ab351b6467f615e29a10"
+    },
+    {
+      "group": "Cross-allocation batching",
+      "label": "Cross: broader batching",
+      "csv": "cross.csv",
+      "source_archive": "e07-capture-cross-i5pgrzo1.tar.gz",
+      "source_archive_sha256": "d0bd8c1d1c1f6b061e53f3b66ba3bc10644e3ecc108a48656508d4806e095eb7",
+      "source_csv_sha256": "505c5b32a2ecaa4cd27f32c761376ec74da2aebfdfad5d3dbf1bcc4107928dda"
+    }
+  ]
+}

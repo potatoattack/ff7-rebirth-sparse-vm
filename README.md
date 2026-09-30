@@ -125,6 +125,11 @@ sudo pacman -R linux-cachyos-sparse-vm-headers linux-cachyos-sparse-vm
 
 ## Testing and reporting
 
+For a repeatable frame-time comparison, see the
+[benchmark capture and graph instructions](benchmarks/README.md). They compare
+the same packaged kernel and driver with the feature off and on, using automatic
+MangoHud logging. A matched benchmark of the public package is still pending.
+
 For a report, include your GPU model and PCI ID, repository revision, kernel and
 package versions, Proton version, display backend and launch options. Note
 whether the activation diagnostic appeared, how the same scene compares with

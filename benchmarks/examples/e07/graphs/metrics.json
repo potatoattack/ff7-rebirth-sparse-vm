@@ -1,0 +1,49 @@
+{
+  "title": "Historical experiment: cross-allocation batching",
+  "notes": "E07 component comparison, not unpatched versus final. Same process and saved settings; manually rotated camera. No uncapped reversal. User-reported 50% scaling; live internal dimensions were not measured. See README.md.",
+  "runs": [
+    {
+      "group": "Same-allocation batching",
+      "label": "Narrow: existing batching",
+      "csv": "narrow.csv",
+      "source_archive": "e07-capture-narrow-688979dd.tar.gz",
+      "source_archive_sha256": "35e279c1784fc020128445160b6ccb0af4f314f90930f0b710eaca636e492eb9",
+      "source_csv_sha256": "43f28887f32bb9b56c8d67169f0f6b069f40cd2cb693ab351b6467f615e29a10",
+      "sha256": "96e9012b26c0b461274259833a0426d42c4ae7aa1deb79a1f5b76f21412c8fb1",
+      "frames": 3976,
+      "duration_s": 39.809716699999996,
+      "average_fps": 99.87511415774533,
+      "p50_ms": 8.64242,
+      "p95_ms": 19.105425,
+      "p99_ms": 26.14445,
+      "p99.9_ms": 33.42267000000001,
+      "max_ms": 35.5665,
+      "over_25_ms": 49,
+      "over_33_333_ms": 6,
+      "over_50_ms": 0,
+      "over_33_333_ms_per_minute": 9.043018384504103
+    },
+    {
+      "group": "Cross-allocation batching",
+      "label": "Cross: broader batching",
+      "csv": "cross.csv",
+      "source_archive": "e07-capture-cross-i5pgrzo1.tar.gz",
+      "source_archive_sha256": "d0bd8c1d1c1f6b061e53f3b66ba3bc10644e3ecc108a48656508d4806e095eb7",
+      "source_csv_sha256": "505c5b32a2ecaa4cd27f32c761376ec74da2aebfdfad5d3dbf1bcc4107928dda",
+      "sha256": "ac1465b431a50641a88de50c53e0f2924f9fc18bc35c8dd0fbb2acc92b39961d",
+      "frames": 4396,
+      "duration_s": 39.86923218,
+      "average_fps": 110.26046300949858,
+      "p50_ms": 8.230285,
+      "p95_ms": 15.8788,
+      "p99_ms": 21.01091000000001,
+      "p99.9_ms": 26.892037500000164,
+      "max_ms": 29.0688,
+      "over_25_ms": 10,
+      "over_33_333_ms": 0,
+      "over_50_ms": 0,
+      "over_33_333_ms_per_minute": 0.0
+    }
+  ],
+  "method": "All frames, linear-interpolated percentiles; FPS = frame count / sum of frame intervals. Runs are not pooled."
+}
