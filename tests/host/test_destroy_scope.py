@@ -11,7 +11,14 @@ def function(name,kind):
 functions='\n'.join([function('radv_amdgpu_ff7_destroy_begin','uint64_t'),
                      function('radv_amdgpu_ff7_destroy_done','void'),
                      function('radv_amdgpu_bo_va_op','int'),
-                     function('radv_amdgpu_virtual_bo_clear_mapping','int')])
+                     function('radv_amdgpu_virtual_bo_clear_mapping','int'),
+                     function('radv_amdgpu_bo_va_size','uint64_t')])
+# Exercise the actual physical destruction block, including Mesa 26.2.5's
+# separate guard-page mapping. Keep this coupled to source, not a copied model.
+destroy=function('radv_amdgpu_winsys_bo_destroy','void')
+start=destroy.index('   const uint64_t va_size =')
+end=destroy.index('   ac_drm_bo_free(',start)
+functions+='\nstatic void physical_unmap(struct radv_amdgpu_winsys *ws, struct radv_amdgpu_winsys_bo *bo, uint64_t flags) {\n'+destroy[start:end]+'}\n'
 pre=r'''
 #define _DEFAULT_SOURCE
 #include <assert.h>
@@ -25,21 +32,22 @@ pre=r'''
 #define RADEON_FLAG_GL2_BYPASS 1u
 #define RADEON_FLAG_READ_ONLY 2u
 #define RADEON_FLAG_VM_UPDATE_WAIT 4u
+#define RADEON_FLAG_VM_PAD_1PAGE 8u
 #define GFX9 9
 #define p_atomic_inc(p) (++*(p))
 #define simple_mtx_lock(p) ((void)(p))
 #define simple_mtx_unlock(p) ((void)(p))
 #define align64(v,a) (((v)+(a)-1)&~((uint64_t)(a)-1))
 struct radeon_winsys_bo { bool ff7_api_owned,is_local,is_virtual;uint64_t size,va; };
-struct radv_amdgpu_winsys_bo {struct radeon_winsys_bo base;bool emulate_sparse_residency;};
+struct radv_amdgpu_winsys_bo {struct radeon_winsys_bo base;bool emulate_sparse_residency;uint32_t bo_handle,flags;};
 struct radv_amdgpu_winsys {bool ff7_explicit_destroy;uint64_t *ff7_destroy_stats;void *dev;
  int vm_ioctl_lock;uint32_t vm_timeline_syncobj;uint64_t vm_timeline_seq_num;struct {int gfx_level;} info;};
 struct ff7_vm_batch {int unused;};
-static unsigned calls;static uint64_t flags_seen[2],addr_seen[2],size_seen[2];static int error;
+static unsigned calls;static uint64_t flags_seen[2],addr_seen[2],size_seen[2];static int error,error_call=-1;
 static int ff7_vm_push(struct ff7_vm_batch *b,struct drm_amdgpu_gem_va *v){(void)b;(void)v;assert(0);return 0;}
 static int ac_drm_bo_va_op_raw(void *d,uint32_t h,uint64_t o,uint64_t size,uint64_t addr,uint64_t f,uint32_t op){
  (void)d;(void)h;(void)o;assert(op==AMDGPU_VA_OP_UNMAP||op==AMDGPU_VA_OP_CLEAR);assert(calls<2);
- flags_seen[calls]=f;addr_seen[calls]=addr;size_seen[calls]=size;calls++;return error;}
+ flags_seen[calls]=f;addr_seen[calls]=addr;size_seen[calls]=size;calls++;return error_call<0||error_call==(int)calls-1?error:0;}
 static int ac_drm_bo_va_op_raw2(void *d,uint32_t h,uint64_t o,uint64_t s,uint64_t a,uint64_t f,uint32_t op,uint32_t sy,uint64_t t,int i,int j){
  (void)d;(void)h;(void)o;(void)s;(void)a;(void)f;(void)op;(void)sy;(void)t;(void)i;(void)j;assert(0);return 0;}
 static int ac_drm_cs_syncobj_timeline_wait(void *d,uint32_t *s,uint64_t *t,int n,int64_t timeout,int flags,void *p){
@@ -49,7 +57,7 @@ static uint64_t radv_amdgpu_virtual_bo_get_low_addr(struct radv_amdgpu_winsys *w
 post=r'''
 int main(void){
  struct radv_amdgpu_winsys ws={.info={.gfx_level=11}};uint64_t counts[12]={0};ws.ff7_destroy_stats=counts;
- struct radv_amdgpu_winsys_bo bo={.base={.size=65537,.va=0x200000}};
+ struct radv_amdgpu_winsys_bo bo={.base={.size=65537,.va=0x200000},.bo_handle=42};
  struct {bool api,local,virtual_,eligible;} cases[]={
   {false,true,false,false},{false,false,true,false},{false,false,false,false},
   {true,false,false,false},{true,true,false,true},{true,false,true,true},{true,true,true,true}};
@@ -68,6 +76,17 @@ int main(void){
  assert(counts[4]+counts[5]+counts[6]==14 && counts[7]+counts[8]+counts[9]==14 && counts[10]==0);
  calls=0;error=-5;assert(radv_amdgpu_virtual_bo_clear_mapping(&ws,&bo,FF7_VM_EXPLICIT)==-5 && calls==1);
  radv_amdgpu_ff7_destroy_done(&ws,true,true,error);assert(counts[10]==1);
+ for(unsigned padded=0;padded<2;padded++)for(unsigned explicit_=0;explicit_<2;explicit_++)for(int fail=-1;fail<(padded?2:1);fail++){
+  calls=0;error=fail<0?0:-5;error_call=fail;bo.flags=padded?RADEON_FLAG_VM_PAD_1PAGE:0;
+  uint64_t before=counts[10],f=explicit_?FF7_VM_EXPLICIT:0;
+  physical_unmap(&ws,&bo,f);
+  assert(calls==(padded?2:1));
+  for(unsigned i=0;i<calls;i++)assert((flags_seen[i]&FF7_VM_EXPLICIT)==f);
+  assert(addr_seen[calls-1]==bo.base.va && size_seen[calls-1]==(padded?73728:69632));
+  if(padded)assert(addr_seen[0]==bo.base.va+69632 && size_seen[0]==4096);
+  assert(counts[10]==before+(fail>=0));
+ }
+ puts("PASS: actual physical destruction unmaps padding and BO in order, preserves opt-in flags, records either failure and still unmaps the BO");
  puts("PASS: actual RADV lifetime scope excludes internal/nonlocal BOs; real UNMAP retains explicit flags; both virtual VA aliases retain flags; error propagation and counters balance");
 }
 '''

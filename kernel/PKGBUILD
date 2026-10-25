@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: GPL-2.0-only
-# Based on CachyOS linux-cachyos c7d6ad1ead107761d354a12d6217ddf6840cb177.
+# Based on CachyOS linux-cachyos 523baf9cc1e37b7f8079064447f1418702c45154.
 pkgbase=linux-cachyos-sparse-vm
 pkgname=(linux-cachyos-sparse-vm linux-cachyos-sparse-vm-headers)
-pkgver=7.2.8
-pkgrel=2
+pkgver=7.3.0
+pkgrel=5
 pkgdesc='CachyOS kernel with opt-in AMDGPU sparse VM improvements'
 arch=(x86_64)
 url='https://github.com/CachyOS/linux'
@@ -11,7 +11,7 @@ license=(GPL-2.0-only)
 makedepends=(bc bison flex binutils clang llvm lld cpio gettext libelf openssl
              pahole perl python rust rust-bindgen rust-src tar xxhash xz zlib zstd)
 options=(!strip !debug !lto)
-_srcname=cachyos-7.2.8-1
+_srcname=cachyos-7.3.0-4
 _patches=(
   0001-amdgpu-explicit-unmap-e01.patch
   0002-amdgpu-direct-replace-e03.patch
@@ -26,10 +26,10 @@ _patches=(
 source=("https://github.com/CachyOS/linux/releases/download/$_srcname/$_srcname.tar.gz"
         config "${_patches[@]}")
 b2sums=(
-  'e9c1784d45b95872cee8a993c96659dda4174b1e42097757dcbada2f1041776a67009caefe0ed0b5af2c3d9811d0cb8f72c67b988f0aef1673ed6d38b901154b'
-  '21343697f5f1647aadbdec8a4aa477b10622e5ae04fa07fcf6f9bab67dece7180872676bdc49a90de5d273c2c13127c5812a7ca67dbd9edce3e26e8c38d358d1'
-  '35963b80a81831306c28fe9fa417130fd4a38bc2775fa3cf9c1d9eb24c6dca91f2ff50f668f139020a704d5a3508783f3a53df4f93b42f4a7f7375df6991c46b'
-  '4a7d03092c38999c2ee01d7d6ad5287c02c5666387c43d394874aaedfd960559584d4cef18e3510ff7dcede30ffb0afc6f80915d0ccfc0eb28be65c1cc87f8d1'
+  'd90b9a609d930cf596022050014ef75e11f3b9378fb51be7763743bc15b10d31caa8d48c59149ed2aea28853aae1ec6d7e68a8ce441b1bd014c9897cbeb8dba5'
+  'e21485bd3d917be15837eb51ddb9aeb4a0df5fb7b18ccbf1d520aff2340833935e441f634e4ae8482a21ff38a9dec9f320bec3459aedf15087909b6eb2cff7db'
+  'a04149747e27dea14a0e9c6b600b947b6bb9ec4270e000b546fcbc0c7b15c238e814e38c379bdeac84f394274b287519aa6fbb4385e2a9732ed7849df68e06c0'
+  '714b20e7bb09a0aefc38401a8fe8dc3e22818cda90ebebfa3060d3e321b7095b50cbb49ee4f1ddf3a9495bd8e9c2c5aba6051c8503875c71ed3723fbc8de2e43'
   '022a82bc224afc4192eaa115addf3541a9b918f296732ee1847207e479fbfc86fb2dfaf104a09398d6d71ad9d72e217e13b32f6efd946da1f883a469a0253c48'
   'f9a90ad61bef93f96f6573f1cef7c433e697e9d61b07167c88f3f72a9b5812da1a18a6e03d4f9869d4487f8992b1ebd1685c5ebb88ec88e8b82833d4060b1cf4'
   '715dbe8d04c924f34bfb6b1fd788a261804f42576e8c8ad6f72ffdba2277dacceda35fae3b6059eb3104eb7113450fdb45fd3d0136676d362b8bc34ffc1447ed'

@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: MIT
 pkgname=vulkan-radeon-sparse-vm
-pkgver=26.2.3
+pkgver=26.2.5
 epoch=3
-pkgrel=2
+pkgrel=1
 pkgdesc='RADV with per-game opt-in AMDGPU sparse VM improvements'
 arch=(x86_64)
 url='https://www.mesa3d.org/'
@@ -15,25 +15,24 @@ makedepends=(meson ninja python-mako python-packaging python-yaml glslang
 provides=("vulkan-radeon=$epoch:$pkgver" vulkan-driver)
 conflicts=(vulkan-radeon)
 options=(!lto !debug)
-_commit=31e9a6b2e95e30d84bf3177d1f497d063e59b6b2
 _patches=(
   0001-radv-per-submission-vm-batch-e09.patch
   0002-radv-explicit-batch-e12.patch
   0003-radv-api-owned-destroy-e16.patch
   0004-radv-sparse-vm-opt-in.patch
 )
-source=("mesa-$_commit.tar.gz::https://codeload.github.com/chaotic-cx/mesa-mirror/tar.gz/$_commit"
+source=("https://archive.mesa3d.org/mesa-$pkgver.tar.xz"
         "${_patches[@]}")
 sha256sums=(
-  '705946ae365b9138fb4fa23936def3c764c6dd053bb80ec925f97037c614b08b'
-  'fed03befc489d343a4fbf670c271b3d9c8d11ec3498ff8271357b4b97bf27cfc'
+  '794b3d1729075dae7ebd47c7283b7ca0cdb5dec668f7f11cc0a5d82f6138a0a5'
+  '690321d538160eed4ae28fbc34b99697741e907834d8f236fe8e1d36e9a99fa7'
   '047946d2cc7bf067bae575ccc51988ad3e40843f6d3c62b8b9c421556e748e0d'
-  'acf83e9438a1ece43d80f1cfd158e1bc6a5988405e24a35c02ea221dc40e331d'
+  '07f6aab2fc30e04cfa7320c0b42cd0f3fc46e85e41b6be0eb9b8a80c70749e80'
   'ec3639321330e148149d4062cead302a05f6a8d398efb12f04f67d93adc5faef'
 )
 
 prepare() {
-  cd "mesa-mirror-$_commit"
+  cd "mesa-$pkgver"
   local patch
   for patch in "${_patches[@]}"; do
     patch --batch --forward --fuzz=0 -Np1 -i "$srcdir/$patch"
@@ -41,7 +40,7 @@ prepare() {
 }
 
 build() {
-  meson setup "mesa-mirror-$_commit" build --prefix=/usr --libdir=lib --buildtype=release \
+  meson setup "mesa-$pkgver" build --prefix=/usr --libdir=lib --buildtype=release \
     -Dgallium-drivers=[] -Dvulkan-drivers=amd -Dplatforms=x11,wayland \
     -Dglx=disabled -Degl=disabled -Dgbm=disabled -Dopengl=false \
     -Dllvm=disabled -Damd-use-llvm=false -Dbuild-tests=false -Dvideo-codecs=[]
@@ -52,6 +51,6 @@ package() {
   DESTDIR="$pkgdir" meson install -C build --no-rebuild
   # The distribution's mesa package owns this shared configuration.
   rm "$pkgdir/usr/share/drirc.d/00-mesa-defaults.conf"
-  install -Dm644 "mesa-mirror-$_commit/docs/license.rst" \
+  install -Dm644 "mesa-$pkgver/docs/license.rst" \
     "$pkgdir/usr/share/licenses/$pkgname/license.rst"
 }

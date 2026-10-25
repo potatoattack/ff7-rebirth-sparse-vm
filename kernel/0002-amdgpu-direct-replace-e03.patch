@@ -340,7 +340,7 @@ flags. Ordinary applications do not set either private E03 flag.
  	/**
  	 * @needs_flush: true whenever we need to invalidate the TLB
 @@ -554,6 +558,10 @@
- void amdgpu_vm_flush(struct amdgpu_ring *ring, struct amdgpu_job *job, bool need_pipe_sync);
+ 		     bool *emit_gds_needed);
  int amdgpu_vm_update_pdes(struct amdgpu_device *adev,
  			  struct amdgpu_vm *vm, bool immediate);
 +int amdgpu_vm_ff7_replace(struct amdgpu_vm_update_ctx *ctx,

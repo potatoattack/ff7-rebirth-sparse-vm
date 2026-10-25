@@ -60,14 +60,15 @@ oracles remain readable.
 After `makepkg -o` has prepared both source trees:
 
 ```sh
-bash tests/run-host.sh kernel/src/cachyos-7.2.8-1 \
-  mesa/src/mesa-mirror-31e9a6b2e95e30d84bf3177d1f497d063e59b6b2
+bash tests/run-host.sh kernel/src/cachyos-7.3.0-3 \
+  mesa/src/mesa-26.2.5
 ```
 
 These compile the actual new activation functions against controlled ioctl and
 reservation boundaries, test default-off/unsupported/error behavior and protocol
 agreement, exhaustively exercise batching fallbacks, check required queue waits,
-and check API-owned destruction eligibility. The host checks do not replace
+and check API-owned destruction eligibility, separate guard-page unmaps and
+cleanup error handling. The host checks do not replace
 compilation of the driver or native testing on a GPU.
 The batch check includes the supplied patched Mesa tree's header directly;
 there is no separate copied implementation in the test directory.
