@@ -1,4 +1,28 @@
-# Candidate validation — 23 October 2026
+# Candidate validation — 25 October 2026
+
+Source-package candidate **0.1.0-rc4** uses CachyOS `cachyos-7.3.0-4`
+(Linux 7.3) and builds the separate kernel as `7.3.0-5-cachyos-sparse-vm`.
+Mesa remains at 26.2.5 with the rc3 patch set. The new kernel source archive's
+SHA-256 and BLAKE2 match CachyOS's release asset and packaging recipe.
+
+| Check | rc4 result / boundary |
+| --- | --- |
+| Kernel source and recipe | All 11 source/config/patch BLAKE2 checksums pass. The generic config is unchanged from rc3. `kernelrelease` returns `7.3.0-5-cachyos-sparse-vm`. |
+| Kernel patch application | All nine patches apply with zero fuzz to the exact `cachyos-7.3.0-4` release archive. The application log has the same offsets as rc3, and all 14 patched target files match rc3 byte for byte. |
+| Kernel compilation | All 11 affected AMDGPU C translation units compile with AMDGPU and HSA/SVM enabled. No compiler warnings or errors appear in their build log. This is an object build, not a full kernel/module link or the Clang/LTO package build. |
+| Host regressions | The host suite passes on the newly patched kernel source and unchanged patched Mesa source, including batch fallback, synchronization, ownership, and protocol checks. Four native-result validator tests pass. |
+| Mesa | The Mesa source, patches and recipe are unchanged. The complete RADV build and staging recorded for rc3 carry forward; no new RADV build or GPU test was run for rc4. |
+
+The user's v4 system reports `linux-cachyos 7.3.0-5`, but the exact build inputs
+of that installed package were not available for comparison. The latest public
+CachyOS source release checked here is `cachyos-7.3.0-4`; the custom `-5`
+identifies this separate package revision. A full Arch `makepkg` build, boot,
+DKMS/initramfs integration, native GPU tests and game validation remain pending.
+No new performance or stability claim is made. See
+[rc4 machine-readable evidence](validation-rc4.json) and
+[source provenance](provenance.md).
+
+## Historical rc3 validation — 23 October 2026
 
 Source-package candidate **0.1.0-rc3** updates both bases to released sources:
 CachyOS **7.3.0-3**, based on Linux **7.3**, and Mesa **26.2.5**. The private

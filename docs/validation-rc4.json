@@ -1,0 +1,70 @@
+{
+  "candidate": "0.1.0-rc4",
+  "date": "2026-10-25",
+  "versions": {
+    "linux": "7.3",
+    "cachyos_source": "cachyos-7.3.0-4",
+    "custom_kernel_package": "7.3.0-5",
+    "kernelrelease": "7.3.0-5-cachyos-sparse-vm",
+    "mesa_source": "26.2.5"
+  },
+  "source": {
+    "url": "https://github.com/CachyOS/linux/releases/download/cachyos-7.3.0-4/cachyos-7.3.0-4.tar.gz",
+    "sha256": "3c82dd3ae8f12d10c81f46606bbc5ecb2b87efc7fb57519924bc4d6e5e79e0b1",
+    "blake2b": "d90b9a609d930cf596022050014ef75e11f3b9378fb51be7763743bc15b10d31caa8d48c59149ed2aea28853aae1ec6d7e68a8ce441b1bd014c9897cbeb8dba5",
+    "release_asset_sha256_matched": true,
+    "upstream_pkgbuild_blake2b_matched": true
+  },
+  "packaging": {
+    "public_reference_commit": "523baf9cc1e37b7f8079064447f1418702c45154",
+    "public_reference_source": "cachyos-7.3.0-4",
+    "public_reference_pkgrel": 4,
+    "custom_pkgrel": 5,
+    "kernel_recipe_input_blake2b_passed": 11,
+    "generic_config_sha256": "81fb56fe326612a0dc4705fc5ec309d04bcfffb487db0cb5843918fe92951927",
+    "installed_v4_package_inputs_compared": false
+  },
+  "patch_application": {
+    "patch_count": 9,
+    "exact_release_archive": true,
+    "zero_fuzz": true,
+    "no_rejects": true,
+    "same_application_log_as_rc3": true,
+    "patched_target_files_compared": 14,
+    "patched_targets_identical_rc3": true,
+    "source_release_changed_files_outside_patch_targets": 6
+  },
+  "kernel_compile": {
+    "object_count": 11,
+    "object_sha256": {
+      "amdgpu_amdkfd_gpuvm.o": "5c3216234c67b3d636ad79c5890280fbe29115b10688c2b09ff2e7cbb00158e0",
+      "amdgpu_cs.o": "effb17e41da6d941607362dc7187db8f1e0a4fb15835261a806b4d6738420114",
+      "amdgpu_csa.o": "35546dbf63c9272a3ff316cf10681ae53f7bf2b9a6f5689dd9a7b1e50c1d240c",
+      "amdgpu_dma_buf.o": "0657833c76a12a78b188412ccef90c7718ef7bf317e34d6d4cfe91fb70073f27",
+      "amdgpu_gem.o": "fa310eec3440f6ba184b58d79268383fca19ec5fc6cde77f28a8168496a76ce3",
+      "amdgpu_kms.o": "573b4b972047831c56004478447827f9ce63a8935f93c4219cbb9b5a3511cb70",
+      "amdgpu_seq64.o": "a1672cd2bd2a4745c51e3b2655984ed80dba7d5a27a5855518836447716e0d27",
+      "amdgpu_userq.o": "2b5b0c6f89e4a058acfa5417b16f29339073d543f657fc0fe9a5821259b88b9e",
+      "amdgpu_vm.o": "0f8b5f57a5632bb9e57893c6570c2d8e80d58bc8006e40ec4829f15d46230785",
+      "amdgpu_vm_pt.o": "02523158b64cb296a9e4caf374a366a7c357210604ef2571d30ed334294f09aa",
+      "amdgpu_vm_sdma.o": "642fa4918eec6d76fd2757768dcf2c039d60905cfa8cf586b523b7f8d21956dc"
+    },
+    "compiler": "16.2.1",
+    "config": {
+      "DRM_AMDGPU": "m",
+      "HSA_AMD": "y",
+      "HSA_AMD_SVM": "y"
+    },
+    "warnings": 0,
+    "full_kernel_or_module_linked": false,
+    "clang_lto_recipe_build_tested": false
+  },
+  "tests": {
+    "host_regressions": true,
+    "native_result_validator_tests": 4,
+    "mesa_source_patches_recipe_unchanged_from_rc3": true,
+    "mesa_full_build_and_staging_inherited_from_rc3": true,
+    "new_gpu_or_game_tests": false
+  },
+  "limitations": "Full Arch makepkg, boot, DKMS/initramfs, GPU and game validation remain pending; installed v4 package source inputs were not available for comparison."
+}

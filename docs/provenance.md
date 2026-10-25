@@ -2,8 +2,8 @@
 
 | Input | Pin |
 | --- | --- |
-| Kernel | [CachyOS `cachyos-7.3.0-3` release archive](https://github.com/CachyOS/linux/releases/tag/cachyos-7.3.0-3), based on Linux 7.3; released 22 October 2026 |
-| Kernel configuration / packaging reference | `CachyOS/linux-cachyos` commit [`cbd3c2573e7281c006e8f4dbf4e2dd781542d7f7`](https://github.com/CachyOS/linux-cachyos/tree/cbd3c2573e7281c006e8f4dbf4e2dd781542d7f7/linux-cachyos), `config` and `PKGBUILD` |
+| Kernel | [CachyOS `cachyos-7.3.0-4` release archive](https://github.com/CachyOS/linux/releases/tag/cachyos-7.3.0-4), based on Linux 7.3; released 23 October 2026 |
+| Kernel configuration / packaging reference | `CachyOS/linux-cachyos` commit [`523baf9cc1e37b7f8079064447f1418702c45154`](https://github.com/CachyOS/linux-cachyos/tree/523baf9cc1e37b7f8079064447f1418702c45154/linux-cachyos), `config` and `PKGBUILD` |
 | RADV | Official [Mesa 26.2.5 release archive](https://archive.mesa3d.org/mesa-26.2.5.tar.xz); [release notes and SHA-256](https://docs.mesa3d.org/relnotes/26.2.5.html), released 14 October 2026 |
 | Accepted algorithm | E27 kernel's eight patches; E16 RADV's three patches; E28 selection of the guarded direct profile |
 
@@ -13,14 +13,29 @@ machine's config. Distribution training-profile options are disabled by the
 recipe; the source version, scheduler patches and accepted AMDGPU changes stay
 with the pinned CachyOS release. The new kernel package has a separate name.
 
-## 23 October 2026 source refresh
+## 25 October 2026 kernel package refresh
+
+The user reports `linux-cachyos` from the v4 repository running
+`7.3.0-5-cachyos`. The latest public source archive checked here is
+`cachyos-7.3.0-4`; [CachyOS's public packaging recipe](https://github.com/CachyOS/linux-cachyos/blob/523baf9cc1e37b7f8079064447f1418702c45154/linux-cachyos/PKGBUILD)
+uses that archive and currently lists package release 4. This project's separate
+package uses release 5 to produce `7.3.0-5-cachyos-sparse-vm`. The exact build
+inputs of the user's installed v4 package were not available for comparison.
+
+The [upstream source comparison](https://github.com/CachyOS/linux/compare/cachyos-7.3.0-3...cachyos-7.3.0-4)
+changes six files outside the sparse-VM patch targets. All 14 patched kernel
+files are byte-identical between the two source bases after applying the same
+nine patches. The new archive and checked-in generic configuration match the
+upstream release and packaging checksums. See [rc4 validation](validation-rc4.json).
+
+## Historical rc3 source refresh — 23 October 2026
 
 These were the newest non-RC releases checked on that date. [Kernel.org](https://www.kernel.org/)
 lists 7.3 as released mainline and 7.2.12 as the older stable branch's latest
 point release. Its [release policy](https://www.kernel.org/category/releases.html)
 considers a released mainline kernel stable. CachyOS already publishes a 7.3
 release, so the recipe keeps its distro base and pins the latest source release,
-`7.3.0-3`. The configuration reference above currently packages `7.3.0-2`;
+`7.3.0-3`. The configuration reference used for rc3 packaged `7.3.0-2`;
 the later source release changes an IOMMU revert, not the configuration.
 Mesa 26.3.0-rc1 is excluded. Mesa now uses the official release tarball instead
 of a mirror snapshot. Package release numbers reset to 1 for the new versions.

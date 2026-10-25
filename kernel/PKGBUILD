@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: GPL-2.0-only
-# Based on CachyOS linux-cachyos cbd3c2573e7281c006e8f4dbf4e2dd781542d7f7.
+# Based on CachyOS linux-cachyos 523baf9cc1e37b7f8079064447f1418702c45154.
 pkgbase=linux-cachyos-sparse-vm
 pkgname=(linux-cachyos-sparse-vm linux-cachyos-sparse-vm-headers)
 pkgver=7.3.0
-pkgrel=1
+pkgrel=5
 pkgdesc='CachyOS kernel with opt-in AMDGPU sparse VM improvements'
 arch=(x86_64)
 url='https://github.com/CachyOS/linux'
@@ -11,7 +11,7 @@ license=(GPL-2.0-only)
 makedepends=(bc bison flex binutils clang llvm lld cpio gettext libelf openssl
              pahole perl python rust rust-bindgen rust-src tar xxhash xz zlib zstd)
 options=(!strip !debug !lto)
-_srcname=cachyos-7.3.0-3
+_srcname=cachyos-7.3.0-4
 _patches=(
   0001-amdgpu-explicit-unmap-e01.patch
   0002-amdgpu-direct-replace-e03.patch
@@ -26,7 +26,7 @@ _patches=(
 source=("https://github.com/CachyOS/linux/releases/download/$_srcname/$_srcname.tar.gz"
         config "${_patches[@]}")
 b2sums=(
-  '7bf27e76427339950706fe4bb3b254a5a295b082267a322abf9d2258b00f771e3ffe95f0ffb534d3c6e6071db93c590f2022c9b3c97a6fb416c4c2ff060b0f39'
+  'd90b9a609d930cf596022050014ef75e11f3b9378fb51be7763743bc15b10d31caa8d48c59149ed2aea28853aae1ec6d7e68a8ce441b1bd014c9897cbeb8dba5'
   'e21485bd3d917be15837eb51ddb9aeb4a0df5fb7b18ccbf1d520aff2340833935e441f634e4ae8482a21ff38a9dec9f320bec3459aedf15087909b6eb2cff7db'
   'a04149747e27dea14a0e9c6b600b947b6bb9ec4270e000b546fcbc0c7b15c238e814e38c379bdeac84f394274b287519aa6fbb4385e2a9732ed7849df68e06c0'
   '714b20e7bb09a0aefc38401a8fe8dc3e22818cda90ebebfa3060d3e321b7095b50cbb49ee4f1ddf3a9495bd8e9c2c5aba6051c8503875c71ed3723fbc8de2e43'
