@@ -3,7 +3,7 @@
 **/build/
 **/*.pkg.tar.*
 kernel/*.tar.gz
-mesa/*.tar.gz
+mesa/*.tar.*
 tests/results-*/
 __pycache__/
 *.pyc

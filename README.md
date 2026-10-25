@@ -15,10 +15,12 @@ RADV_EXPERIMENTAL=sparse_vm %command%
 The feature is disabled by default. `sparse_vm` is an option added by this
 project, **not an upstream Mesa option**.
 
-**Status: 0.1.0-rc2, experimental.** The underlying patches substantially
-improved gameplay on a Radeon RX 7900 XTX. The public packages and activation
-interface now have six completed off/on gameplay captures on that GPU.
-Long-term stability and the packaged native GPU suite remain unverified.
+**Status: 0.1.0-rc3, experimental.** This source refresh targets Mesa 26.2.5 and
+Linux 7.3 through CachyOS 7.3.0-3. Patch application, targeted kernel compilation,
+a complete RADV build and host tests pass; this revision has no hardware results.
+The earlier rc2 packages substantially improved gameplay in six completed
+off/on captures on a Radeon RX 7900 XTX. Those measurements do not validate the
+new sources. Long-term stability and the packaged native GPU suite remain unverified.
 Other eligible AMD GPUs are open for testing; equivalent performance and
 stability are not established. See [validation](docs/validation.md).
 
@@ -27,7 +29,7 @@ stability are not established. See [validation](docs/validation.md).
 On an **RX 7900 XTX / Ryzen 9 9950X3D**, three 40-second Tower camera-rotation
 captures per mode show substantially shorter long frames. Both modes use the
 same packaged kernel and RADV, with `sparse_vm` off or on. Every recorded frame
-is included.
+is included. These are historical rc2 results on CachyOS 7.2.8 and Mesa 26.2.3.
 
 | Metric | Feature off | Feature on | Change |
 | --- | ---: | ---: | ---: |
@@ -63,8 +65,9 @@ reproduction command](benchmarks/results/2026-09-30-rx7900xtx/README.md).
 - SDMA page-table updates. Leave `amdgpu.vm_update_mode` at its default (`-1`);
   configurations that use CPU page-table updates are unsupported.
 - APUs, VirtIO and SR-IOV virtual functions are excluded from this candidate.
-- The packages use pinned CachyOS 7.2.8-1 and Mesa 26.2.3 sources. Compatibility
-  with newer source versions has not been verified.
+- The packages use pinned CachyOS 7.3.0-3 (Linux 7.3) and Mesa 26.2.5 release
+  sources. See [source provenance](docs/provenance.md) and
+  [validation boundaries](docs/validation.md).
 
 Use your existing Proton installation. No custom Wine or vkd3d build is
 required. Development testing used native Wine Wayland; other display paths
@@ -109,7 +112,7 @@ Check the booted release:
 uname -r
 ```
 
-For this revision it should be `7.2.8-2-cachyos-sparse-vm`.
+For this revision it should be `7.3.0-1-cachyos-sparse-vm`.
 
 ## Enable for Rebirth
 

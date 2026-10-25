@@ -1,4 +1,31 @@
-# Candidate validation — 30 September 2026
+# Candidate validation — 23 October 2026
+
+Source-package candidate **0.1.0-rc3** updates both bases to released sources:
+CachyOS **7.3.0-3**, based on Linux **7.3**, and Mesa **26.2.5**. The private
+protocol and accepted sparse mapping profile remain v1. Historical performance
+and stability observations below apply to rc2 or E28, not this refresh.
+
+| Check | rc3 result / boundary |
+| --- | --- |
+| Source integrity | Mesa SHA-256 matches its official release notes; CachyOS SHA-256 matches its GitHub release asset digest. All recipe input checksums pass. Official Linux 7.3 SHA-256 matches kernel.org's checksum list. |
+| Patch application | Four Mesa patches and nine kernel patches apply with `--batch --forward --fuzz=0` to the exact release archives. Kernel patches also apply to pristine upstream Linux 7.3; its 13 affected files match CachyOS byte for byte. Patched files match the compiled trees. |
+| Upstream audit | Removed the obsolete MES self-test hunk. Preserved upstream GEM-close, CS error, user-queue/reset and separate Mesa guard-page cleanup behavior. See [provenance](provenance.md). |
+| Host regressions | Exhaustive batching masks/fallbacks, wait ordering, ownership exclusions and protocol/eligibility tests pass. Extended the actual physical destruction test to cover padding, both synchronization modes and either unmap failing. Native result validator: four tests pass. |
+| Kernel compilation | All 11 affected C translation units compile with GCC 16.2.1, x86-64 defconfig plus AMDGPU module and HSA/SVM enabled. This is a targeted build, not the recipe's full Clang/LTO configuration or a linked kernel/module. |
+| RADV compilation | Complete release build and link, X11 + Wayland, ACO, LLVM disabled; GCC 16.2.1, libdrm 2.4.134, Meson 1.12.1, Ninja 1.13.2. |
+| RADV staging | Updated `package()` runs successfully into a private staging directory. Contains the 64-bit driver, ICD, RADV defaults and license; excludes shared Mesa defaults. ICD points to `/usr/lib/libvulkan_radeon.so`; no RPATH/RUNPATH. |
+| Native programs | Both compile with `-Wall -Wextra -Werror` and pass CPU self-tests. Compilation uses Vulkan headers bundled in the exact Mesa release. No GPU execution. |
+| Tooling / recipes | Eight benchmark tests, Bash syntax, ShellCheck error checks and input checksums pass. |
+
+Validation ran only in the isolated dot VM workspace. Missing build tools were
+placed in a private task directory. No packages, kernel, driver or configuration
+were installed on the live system. No desktop/game launch, GPU validation,
+reboot, DKMS, initramfs or bootloader check was performed. A full Arch `makepkg`
+build and hardware/native/game validation remain pending for rc3. No new
+performance claim is made. Machine-readable pins, file hashes, build commands
+and results are in [validation-rc3.json](validation-rc3.json).
+
+## Historical rc2 validation — 30 September 2026
 
 This is source-package candidate **0.1.0-rc2**. The accepted E28 gameplay result
 remains the historical reference. The public packages and new activation
