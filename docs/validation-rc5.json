@@ -1,0 +1,401 @@
+{
+  "candidate": "0.1.0-rc5",
+  "date": "2026-11-02",
+  "repository_base": "ef813e43048345d7b87a89f8986012fdfa99eda0",
+  "versions": {
+    "linux": "7.3.1",
+    "cachyos_source": "cachyos-7.3.1-1",
+    "kernel_package": "7.3.1-1",
+    "kernelrelease": "7.3.1-1-cachyos-sparse-vm",
+    "mesa_package": "3:26.2.6-1",
+    "protocol": 1
+  },
+  "release_sources": {
+    "kernel": "https://www.kernel.org/",
+    "mesa": "https://docs.mesa3d.org/relnotes/26.2.6.html",
+    "cachyos": "https://github.com/CachyOS/linux/releases/tag/cachyos-7.3.1-1",
+    "packaging": "https://github.com/CachyOS/linux-cachyos/tree/343523fffa2cbfd37e37a04e793d641cbd0fe975/linux-cachyos",
+    "selection": "Latest stable Linux and Mesa checked on 2026-11-02; preserve the existing CachyOS downstream packaging. Linux 7.4-rc1 and Mesa 26.3 release candidates excluded."
+  },
+  "source_commits": {
+    "linux_v7.3.1": "79a907609d53d5cd645b42c11550d295d43abf99",
+    "cachyos-7.3.1-1": "36ae4c219cfbd02576048c7ca1d366cea5db8034",
+    "mesa-26.2.6": "8e87a503ebd91408c88596d1b9eeb5f4c0b2088d",
+    "cachyos_packaging": "343523fffa2cbfd37e37a04e793d641cbd0fe975"
+  },
+  "source_archives": {
+    "cachyos-7.3.1-1.tar.gz": {
+      "sha256": "3dba29aa8e7dcda43aee6898e4c66dfbfd997eb5d902510b0faeacc696ddfb3f",
+      "blake2b": "b744477e1202ae7c63020645fdd923625da6edd2bde61d01d9c7755e6d9628fc3fb00e615261f02a5c503d5c890cb9f8e1e9f068aea7ed01fda45b2d64e7216a"
+    },
+    "mesa-26.2.6.tar.xz": {
+      "sha256": "b9436b3e1a8be76fbd4823dc884f90596ab7c6ac5e1867a305e66ffccfb31a92",
+      "blake2b": "48b782cf78ab81edefd049f32074c9ccc2891402cdd0a6298037d0ee8c5f4c1e6cf9386fc196c201beea89a3c4cbfee53aa84c3bd0cc91865b6fce25494cd630"
+    },
+    "linux-7.3.1.tar.xz": {
+      "sha256": "fa595aad93734f829c963c2a90ef7c3673224fd7fdae7b49406e397cde2de231",
+      "blake2b": "46aecb5a8b875642c8f627a2b9bc100ecedc91dc26e727131f9c6ea6d87bf89367fa6f4983b9f1188600609f8bbc35788cb2ce96802e656deb54fdc6670cdf79"
+    }
+  },
+  "integrity": {
+    "mesa_official_release_sha256_matched": true,
+    "linux_official_checksum_list_matched": true,
+    "cachyos_release_asset_sha256_matched": true,
+    "cachyos_packaging_blake2b_matched": true,
+    "generic_config_matches_pinned_packaging_reference": true,
+    "generic_config_sha256": "81fb56fe326612a0dc4705fc5ec309d04bcfffb487db0cb5843918fe92951927"
+  },
+  "upstream_audit": {
+    "kernel": {
+      "files": [
+        "drivers/gpu/drm/amd/amdgpu/amdgpu_amdkfd_gpuvm.c",
+        "drivers/gpu/drm/amd/amdgpu/amdgpu_cs.c",
+        "drivers/gpu/drm/amd/amdgpu/amdgpu_csa.c",
+        "drivers/gpu/drm/amd/amdgpu/amdgpu_dma_buf.c",
+        "drivers/gpu/drm/amd/amdgpu/amdgpu_gem.c",
+        "drivers/gpu/drm/amd/amdgpu/amdgpu_kms.c",
+        "drivers/gpu/drm/amd/amdgpu/amdgpu_seq64.c",
+        "drivers/gpu/drm/amd/amdgpu/amdgpu_userq.c",
+        "drivers/gpu/drm/amd/amdgpu/amdgpu_vm.c",
+        "drivers/gpu/drm/amd/amdgpu/amdgpu_vm.h",
+        "drivers/gpu/drm/amd/amdgpu/amdgpu_vm_pt.c",
+        "drivers/gpu/drm/amd/amdgpu/amdgpu_vm_sdma.c",
+        "include/uapi/drm/amdgpu_drm.h"
+      ],
+      "upstream_changed_targets": [],
+      "original_patches_apply_zero_fuzz": true
+    },
+    "mesa": {
+      "files": [
+        "docs/envvars.rst",
+        "include/drm-uapi/amdgpu_drm.h",
+        "src/amd/vulkan/radv_buffer.c",
+        "src/amd/vulkan/radv_buffer.h",
+        "src/amd/vulkan/radv_device.c",
+        "src/amd/vulkan/radv_device_memory.c",
+        "src/amd/vulkan/radv_image.c",
+        "src/amd/vulkan/radv_instance.c",
+        "src/amd/vulkan/radv_instance.h",
+        "src/amd/vulkan/radv_queue.c",
+        "src/amd/vulkan/radv_radeon_winsys.h",
+        "src/amd/vulkan/tools/radv_debug.c",
+        "src/amd/vulkan/winsys/amdgpu/ff7_vm_batch.h",
+        "src/amd/vulkan/winsys/amdgpu/radv_amdgpu_bo.c",
+        "src/amd/vulkan/winsys/amdgpu/radv_amdgpu_winsys.c",
+        "src/amd/vulkan/winsys/amdgpu/radv_amdgpu_winsys.h",
+        "src/amd/vulkan/winsys/amdgpu/radv_amdgpu_winsys_public.h"
+      ],
+      "upstream_changed_targets": [],
+      "original_patches_apply_zero_fuzz": true
+    },
+    "upstream-kernel": {
+      "files": [
+        "drivers/gpu/drm/amd/amdgpu/amdgpu_amdkfd_gpuvm.c",
+        "drivers/gpu/drm/amd/amdgpu/amdgpu_cs.c",
+        "drivers/gpu/drm/amd/amdgpu/amdgpu_csa.c",
+        "drivers/gpu/drm/amd/amdgpu/amdgpu_dma_buf.c",
+        "drivers/gpu/drm/amd/amdgpu/amdgpu_gem.c",
+        "drivers/gpu/drm/amd/amdgpu/amdgpu_kms.c",
+        "drivers/gpu/drm/amd/amdgpu/amdgpu_seq64.c",
+        "drivers/gpu/drm/amd/amdgpu/amdgpu_userq.c",
+        "drivers/gpu/drm/amd/amdgpu/amdgpu_vm.c",
+        "drivers/gpu/drm/amd/amdgpu/amdgpu_vm.h",
+        "drivers/gpu/drm/amd/amdgpu/amdgpu_vm_pt.c",
+        "drivers/gpu/drm/amd/amdgpu/amdgpu_vm_sdma.c",
+        "include/uapi/drm/amdgpu_drm.h"
+      ],
+      "upstream_changed_targets": [],
+      "original_patches_apply_zero_fuzz": true
+    }
+  },
+  "patch_status": {
+    "kernel": [
+      {
+        "patch": "0001-amdgpu-explicit-unmap-e01.patch",
+        "status": "retained; revalidated unchanged on new base",
+        "diff_body_unchanged": true,
+        "header_changed": true,
+        "sha256": "5dd5ae9e9a0315c2107e8ae28c87aab25ca3db47de781d027f46b7e02c0db647"
+      },
+      {
+        "patch": "0002-amdgpu-direct-replace-e03.patch",
+        "status": "retained; revalidated unchanged on new base",
+        "diff_body_unchanged": true,
+        "header_changed": false,
+        "sha256": "423d3ab0793d2c2cd479dc23c4922469806d796d0da0d012ea552550879bd9ee"
+      },
+      {
+        "patch": "0003-amdgpu-bounded-batch-e04.patch",
+        "status": "retained; revalidated unchanged on new base",
+        "diff_body_unchanged": true,
+        "header_changed": false,
+        "sha256": "efebd3f4c6d9de0bcafcbbbe80e7dd9530299e5cc6ff8aec41b778a8ce3d1ae4"
+      },
+      {
+        "patch": "0004-amdgpu-cross-bo-e07.patch",
+        "status": "retained; revalidated unchanged on new base",
+        "diff_body_unchanged": true,
+        "header_changed": false,
+        "sha256": "a2f129fe25cd87d8c0d3b80f3b532a0cdb378056e5f0be12f7ae51df77c9aaa9"
+      },
+      {
+        "patch": "0005-amdgpu-explicit-batch-e12.patch",
+        "status": "retained; revalidated unchanged on new base",
+        "diff_body_unchanged": true,
+        "header_changed": false,
+        "sha256": "72c48c12bcb63449d3cb2aed3d506fe7502c339a90c26637449828b2dedc0477"
+      },
+      {
+        "patch": "0006-amdgpu-explicit-direct-e13.patch",
+        "status": "retained; revalidated unchanged on new base",
+        "diff_body_unchanged": true,
+        "header_changed": false,
+        "sha256": "0c4b46c4cc762107e87a7985a2676beffd2ffa86176eeffdd7c285ab14dc3f95"
+      },
+      {
+        "patch": "0007-amdgpu-partial-split-guard-e24.patch",
+        "status": "retained; revalidated unchanged on new base",
+        "diff_body_unchanged": true,
+        "header_changed": false,
+        "sha256": "57fbd1b44d005ca685933b15acac1d4e9135b36b528c215cf5f9b4f6e00022d6"
+      },
+      {
+        "patch": "0008-amdgpu-leaf-retention-e27.patch",
+        "status": "retained; revalidated unchanged on new base",
+        "diff_body_unchanged": true,
+        "header_changed": false,
+        "sha256": "b3f3a4096094df76044a776e71d7254ad6e494f67a255d5e41630c1628b3b666"
+      },
+      {
+        "patch": "0009-amdgpu-per-vm-opt-in.patch",
+        "status": "retained; revalidated unchanged on new base",
+        "diff_body_unchanged": true,
+        "header_changed": false,
+        "sha256": "abba26eff65676bb79d3b8cd1684f2e332d6c37e91b0d86ca2564dfbd15f5c8a"
+      }
+    ],
+    "mesa": [
+      {
+        "patch": "0001-radv-per-submission-vm-batch-e09.patch",
+        "status": "retained; revalidated unchanged on new base",
+        "diff_body_unchanged": true,
+        "header_changed": false,
+        "sha256": "690321d538160eed4ae28fbc34b99697741e907834d8f236fe8e1d36e9a99fa7"
+      },
+      {
+        "patch": "0002-radv-explicit-batch-e12.patch",
+        "status": "retained; revalidated unchanged on new base",
+        "diff_body_unchanged": true,
+        "header_changed": false,
+        "sha256": "047946d2cc7bf067bae575ccc51988ad3e40843f6d3c62b8b9c421556e748e0d"
+      },
+      {
+        "patch": "0003-radv-api-owned-destroy-e16.patch",
+        "status": "retained; revalidated unchanged on new base",
+        "diff_body_unchanged": true,
+        "header_changed": false,
+        "sha256": "07f6aab2fc30e04cfa7320c0b42cd0f3fc46e85e41b6be0eb9b8a80c70749e80"
+      },
+      {
+        "patch": "0004-radv-sparse-vm-opt-in.patch",
+        "status": "retained; revalidated unchanged on new base",
+        "diff_body_unchanged": true,
+        "header_changed": false,
+        "sha256": "ec3639321330e148149d4062cead302a05f6a8d398efb12f04f67d93adc5faef"
+      }
+    ]
+  },
+  "recipe_checksums": {
+    "kernel": 11,
+    "mesa": 5
+  },
+  "patch_application": {
+    "kernel": {
+      "patches": 9,
+      "zero_fuzz": true,
+      "full_source_targets_match_audit": true,
+      "modified_file_sha256": {
+        "drivers/gpu/drm/amd/amdgpu/amdgpu_amdkfd_gpuvm.c": "907cd759f3ea64fa3b784548c2340bce06aed486faba66a1339e67db5ecd51b7",
+        "drivers/gpu/drm/amd/amdgpu/amdgpu_cs.c": "8546b5d56e4b348ebd697bb64419397a8976bc3e86f0cad097137ffb47b1385b",
+        "drivers/gpu/drm/amd/amdgpu/amdgpu_csa.c": "587e22c9106f84272633c19125355529918735c087fa556d7c975c260b1c6f52",
+        "drivers/gpu/drm/amd/amdgpu/amdgpu_dma_buf.c": "61b87d866c8949b634f664072a79e825507ec15d7e8abf5510f01abd3b332d38",
+        "drivers/gpu/drm/amd/amdgpu/amdgpu_gem.c": "5605b87428025c674fb62f4398fe59bab583761f78de555e8fe6cd5f15713763",
+        "drivers/gpu/drm/amd/amdgpu/amdgpu_kms.c": "432c80dad18c57a92bc5b091e9d56d4c5a24592b301a185c4fd97b9f7f2211e0",
+        "drivers/gpu/drm/amd/amdgpu/amdgpu_seq64.c": "e739dd43c18336bf035989eecea53f250b934d4b295d9417bac17d27261e7f81",
+        "drivers/gpu/drm/amd/amdgpu/amdgpu_userq.c": "e55696940187a60948db05641c9d825dc104a683b032231d3a0544f67eb37550",
+        "drivers/gpu/drm/amd/amdgpu/amdgpu_vm.c": "638f00d315957b0ad38b4432fe2fbc9b6a24435509a0ad3d9cfecda380714381",
+        "drivers/gpu/drm/amd/amdgpu/amdgpu_vm.h": "8facb4c2dcc1733370d32f1edb65b7faafc2e4dd883df4574c8dbbaca6577902",
+        "drivers/gpu/drm/amd/amdgpu/amdgpu_vm_pt.c": "792759ea4e0ea1495d894f2aa6a9b09a8fcdccee5edad52c2bdc04abda60a286",
+        "drivers/gpu/drm/amd/amdgpu/amdgpu_vm_sdma.c": "4ba8ac60574a7cbb15ae1c7027654fbdc6a0b95d3f24b034a13310732082efc8",
+        "include/uapi/drm/amdgpu_drm.h": "60a964decd33d53f7ef9e02e3353a6dbec0810ab6af8cf80b1a732008e20fd33"
+      }
+    },
+    "mesa": {
+      "patches": 4,
+      "zero_fuzz": true,
+      "full_source_targets_match_audit": true,
+      "modified_file_sha256": {
+        "docs/envvars.rst": "728be30c95ca6467dae6eaec5d16bdc561af53479bda4d2b336a408d392b2faa",
+        "include/drm-uapi/amdgpu_drm.h": "392d2ec13be8ea33a3452c9dec6e1194776c56bb5b557009961b44f838160831",
+        "src/amd/vulkan/radv_buffer.c": "bc80102557056c03ba301b6a5e75d89b7e7157ae5268f778fab59e2a799dd394",
+        "src/amd/vulkan/radv_buffer.h": "ca4e79bdb661941c5847530b94fdea3cd6e68914092fd59c16d6485ec0ff217f",
+        "src/amd/vulkan/radv_device.c": "9de7ba0beece1c98308f78bd94472972409437729e0e5de5775bf9fd05a47e9e",
+        "src/amd/vulkan/radv_device_memory.c": "f55c439d814f4a90942695a0c13ac39f6db80ada0359669ecc0def6bf176e6e1",
+        "src/amd/vulkan/radv_image.c": "69c57424e85ad21ebc1405d2b31fe48211162e886a5bc06a8c5a1f757f115646",
+        "src/amd/vulkan/radv_instance.c": "1247ed32a691f365f6306d8c3a7146f46536e89c2bfaf337ef2f1e44517163a3",
+        "src/amd/vulkan/radv_instance.h": "82b4a90682845709a582fb7c0da26026f07089d9e94495dd6799e6198aa9a14b",
+        "src/amd/vulkan/radv_queue.c": "ee26172d23720d7c201addb8f6677a920bf632dc110b3c4e8e11ca7d7463cce9",
+        "src/amd/vulkan/radv_radeon_winsys.h": "f585f5dfbbced959e52086b304a5cd3831b9c1044820bfb7ce66b201a281396c",
+        "src/amd/vulkan/tools/radv_debug.c": "b8f66e14df963af8c1d4afbb4cb238c19a09ca08d0f671b117db8f1a64508711",
+        "src/amd/vulkan/winsys/amdgpu/ff7_vm_batch.h": "21adc0c312d73f815a3ae6f921693ca944f77a1826f2e7a929213da730a4baaa",
+        "src/amd/vulkan/winsys/amdgpu/radv_amdgpu_bo.c": "d87902a838fedf46b94467622d6d5205bc5183b64781216201107c4ad003ff79",
+        "src/amd/vulkan/winsys/amdgpu/radv_amdgpu_winsys.c": "6e44dfe5fd3031f0fc6563f1967aa49df91fc2c301e49bced4b5dbd67dcf66a2",
+        "src/amd/vulkan/winsys/amdgpu/radv_amdgpu_winsys.h": "52187a16e6ecd341777b8f50352ad3632a9532cf4a456e0c782019c3542831ff",
+        "src/amd/vulkan/winsys/amdgpu/radv_amdgpu_winsys_public.h": "baf1b29a6dea682013751b7b9764dea95981472f80ca9355057168f1697a3128"
+      }
+    }
+  },
+  "kernel_compile": {
+    "compiler": "gcc (GCC) 16.2.1 20260810",
+    "object_count": 11,
+    "object_sha256": {
+      "amdgpu_gem.o": "fa310eec3440f6ba184b58d79268383fca19ec5fc6cde77f28a8168496a76ce3",
+      "amdgpu_userq.o": "6fe14324e70072beb067e97b319a6288c7a3da7a79e48059ed862527a9d222d4",
+      "amdgpu_vm_sdma.o": "f194977a79999aae86aa4a58abd3a82407f42c784bd5aa3b9d47a8fd76b2317e",
+      "amdgpu_kms.o": "573b4b972047831c56004478447827f9ce63a8935f93c4219cbb9b5a3511cb70",
+      "amdgpu_dma_buf.o": "0657833c76a12a78b188412ccef90c7718ef7bf317e34d6d4cfe91fb70073f27",
+      "amdgpu_amdkfd_gpuvm.o": "5c3216234c67b3d636ad79c5890280fbe29115b10688c2b09ff2e7cbb00158e0",
+      "amdgpu_csa.o": "35546dbf63c9272a3ff316cf10681ae53f7bf2b9a6f5689dd9a7b1e50c1d240c",
+      "amdgpu_vm.o": "677d31074520875fcc1823545669ae7ea0b0ddcba094793f80d0550fe7a336e7",
+      "amdgpu_vm_pt.o": "b956f84ade988d5de1a0b35194d86ac7928aa5af07d24b1557df14511b90127c",
+      "amdgpu_seq64.o": "a1672cd2bd2a4745c51e3b2655984ed80dba7d5a27a5855518836447716e0d27",
+      "amdgpu_cs.o": "11ec09847aff11fdf5e74fbabd207f2642f4c15f7468b19603358f6f15b5ff99"
+    },
+    "config": {
+      "base": "x86-64 defconfig",
+      "DRM_AMDGPU": "m",
+      "HSA_AMD": "y",
+      "HSA_AMD_SVM": "y"
+    },
+    "warnings": 0,
+    "full_kernel_or_module_linked": false,
+    "clang_lto_recipe_build_tested": false,
+    "generic_config_olddefconfig_and_kernelrelease_tested_with": "GCC"
+  },
+  "radv": {
+    "complete_build_and_link": true,
+    "compiler": "gcc (GCC) 16.2.1 20260810",
+    "meson": "1.12.1",
+    "ninja": "1.13.2.git.kitware.jobserver-pipe-1",
+    "llvm": false,
+    "platforms": [
+      "x11",
+      "wayland"
+    ],
+    "libdrm": "2.4.134",
+    "wrap_mode": "nodownload",
+    "local_binary_sha256": "ef0d32848b35c8a53da1b79260b921c262373f10ef316e2eb16e7ae4e8667e2b",
+    "warnings": 1,
+    "warning_detail": {
+      "file": "src/amd/compiler/aco_statistics.cpp",
+      "byte_identical_to_previous_release": true,
+      "modified_by_sparse_vm_patches": false,
+      "sha256": "e67cfaea74c07d595ebe8892a364e707030737b7ed07e263e08b4a9c9bb18868",
+      "warning": "GCC -Wmaybe-uninitialized in BlockCycleEstimator::block",
+      "same_warning_observed_in_rc3_build_log": true
+    },
+    "staging": {
+      "package_function_staged": true,
+      "files": [
+        "usr/lib/libvulkan_radeon.so",
+        "usr/share/drirc.d/00-radv-defaults.conf",
+        "usr/share/licenses/vulkan-radeon-sparse-vm/license.rst",
+        "usr/share/vulkan/icd.d/radeon_icd.x86_64.json"
+      ],
+      "icd_library_path": "/usr/lib/libvulkan_radeon.so",
+      "rpath_or_runpath": false,
+      "elf64_x86_64": true,
+      "shared_mesa_defaults_excluded": true,
+      "radv_defaults_and_license_present": true,
+      "local_binary_sha256": "ef0d32848b35c8a53da1b79260b921c262373f10ef316e2eb16e7ae4e8667e2b",
+      "binary_distributed": false
+    }
+  },
+  "tests": {
+    "host_regressions_pass": true,
+    "native_result_validator_tests": 4,
+    "native_programs_compile_wall_wextra_werror": true,
+    "native_cpu_self_tests_pass": true,
+    "native_neighbor_layouts": 72,
+    "benchmark_tool_tests": 8,
+    "bash_syntax": true,
+    "shellcheck_bash_error_checks": true,
+    "makepkg_printsrcinfo_both_recipes": true,
+    "git_diff_check": true
+  },
+  "commands": {
+    "apply": "patch --batch --forward --fuzz=0 -Np1 -i PATCH (recipe order, clean checksum-verified exact releases; kernel also checked on vanilla Linux 7.3.1)",
+    "host": "bash tests/run-host.sh PATCHED_CACHYOS_SOURCE PATCHED_MESA_SOURCE",
+    "native_cpu": "make -C tests CPPFLAGS=-I/PATCHED_MESA_SOURCE/include self-test",
+    "benchmark": "python3 -m unittest discover -s benchmarks -p test_benchmarks.py",
+    "recipes": "bash -n kernel/PKGBUILD mesa/PKGBUILD tests/run-host.sh tests/run-native.sh; shellcheck -s bash -S error (same files); compare every PKGBUILD source/config/patch checksum",
+    "kernel": "make O=KERNEL_BUILD defconfig; scripts/config --file KERNEL_BUILD/.config --module DRM_AMDGPU --enable HSA_AMD --enable MEMORY_HOTPLUG --enable MEMORY_HOTREMOVE --enable ZONE_DEVICE --enable DEVICE_PRIVATE --enable HSA_AMD_SVM --disable DEBUG_INFO --disable DEBUG_INFO_BTF --disable WERROR; make O=KERNEL_BUILD olddefconfig; make O=KERNEL_BUILD -j1 drivers/gpu/drm/amd/amdgpu/{amdgpu_vm,amdgpu_vm_pt,amdgpu_vm_sdma,amdgpu_gem,amdgpu_cs,amdgpu_csa,amdgpu_dma_buf,amdgpu_kms,amdgpu_seq64,amdgpu_userq,amdgpu_amdkfd_gpuvm}.o",
+    "radv": "meson setup MESA_SOURCE MESA_BUILD --wrap-mode=nodownload --prefix=/usr --libdir=lib --buildtype=release -Dgallium-drivers=[] -Dvulkan-drivers=amd -Dplatforms=x11,wayland -Dglx=disabled -Degl=disabled -Dgbm=disabled -Dopengl=false -Dllvm=disabled -Damd-use-llvm=false -Dbuild-tests=false -Dvideo-codecs=[]; meson compile -C MESA_BUILD -j 1; package() from reviewed Mesa recipe (private staging only)"
+  },
+  "source_sha256": {
+    "VERSION": "531d324846f206f400812dad8d2e84ac5b85c98b8d67600a1e118a800e496dc3",
+    "kernel/PKGBUILD": "175b66f05b59e5cd448bdadcf397fe55b1776a9fef56f32ac7d25d65319ecc2a",
+    "mesa/PKGBUILD": "edfdbee46882e01bfa3092b1cb9ff7da45ea006b7f262757b49f6c917191b111",
+    "kernel/0001-amdgpu-explicit-unmap-e01.patch": "5dd5ae9e9a0315c2107e8ae28c87aab25ca3db47de781d027f46b7e02c0db647",
+    "kernel/0002-amdgpu-direct-replace-e03.patch": "423d3ab0793d2c2cd479dc23c4922469806d796d0da0d012ea552550879bd9ee",
+    "kernel/0003-amdgpu-bounded-batch-e04.patch": "efebd3f4c6d9de0bcafcbbbe80e7dd9530299e5cc6ff8aec41b778a8ce3d1ae4",
+    "kernel/0004-amdgpu-cross-bo-e07.patch": "a2f129fe25cd87d8c0d3b80f3b532a0cdb378056e5f0be12f7ae51df77c9aaa9",
+    "kernel/0005-amdgpu-explicit-batch-e12.patch": "72c48c12bcb63449d3cb2aed3d506fe7502c339a90c26637449828b2dedc0477",
+    "kernel/0006-amdgpu-explicit-direct-e13.patch": "0c4b46c4cc762107e87a7985a2676beffd2ffa86176eeffdd7c285ab14dc3f95",
+    "kernel/0007-amdgpu-partial-split-guard-e24.patch": "57fbd1b44d005ca685933b15acac1d4e9135b36b528c215cf5f9b4f6e00022d6",
+    "kernel/0008-amdgpu-leaf-retention-e27.patch": "b3f3a4096094df76044a776e71d7254ad6e494f67a255d5e41630c1628b3b666",
+    "kernel/0009-amdgpu-per-vm-opt-in.patch": "abba26eff65676bb79d3b8cd1684f2e332d6c37e91b0d86ca2564dfbd15f5c8a",
+    "mesa/0001-radv-per-submission-vm-batch-e09.patch": "690321d538160eed4ae28fbc34b99697741e907834d8f236fe8e1d36e9a99fa7",
+    "mesa/0002-radv-explicit-batch-e12.patch": "047946d2cc7bf067bae575ccc51988ad3e40843f6d3c62b8b9c421556e748e0d",
+    "mesa/0003-radv-api-owned-destroy-e16.patch": "07f6aab2fc30e04cfa7320c0b42cd0f3fc46e85e41b6be0eb9b8a80c70749e80",
+    "mesa/0004-radv-sparse-vm-opt-in.patch": "ec3639321330e148149d4062cead302a05f6a8d398efb12f04f67d93adc5faef"
+  },
+  "verification_log_sha256": {
+    "host-tests.log": "2f81442bbef62bac3e16db0f050829d76572431172d23ad10ca8b3e7c22a0b7a",
+    "kernel-apply.log": "0cf15c5e8f4f83534c15519c6ade65327992f427308ae4fc4671d3f72ed34f20",
+    "kernel-compile.log": "a6fa33feed24e8f7a6597766536a19803e2b054307dff3b8afb632ba131d7e3f",
+    "kernel-defconfig.log": "c15f943314c97b79701d2fdbfdf0d395653a2adbd3cd9b9a6d8f117628440585",
+    "kernel-generic-config-options.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "kernel-generic-olddefconfig.log": "4b414f008060ecba406cbe94e081e3831a15d86cbbb694092b5f671d64d8e66b",
+    "kernel-original-apply.log": "0cf15c5e8f4f83534c15519c6ade65327992f427308ae4fc4671d3f72ed34f20",
+    "kernel-target-config-options.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "kernel-target-olddefconfig.log": "101bc07a5c1efe497a64b129dc5a2501097fb04214272166df008365192bac44",
+    "kernelrelease.log": "1d036a6922828d8a255dfc2fe5c4bc2b3a9e047743b0ce1f6edc0053d0a3de28",
+    "mesa-apply.log": "82951fef691582f6f90d44f906721789155b0f9a89cdf21cc077f18d1091f344",
+    "mesa-compile.log": "60898b8e827a09217b7ce06282d2ec155907e920f10c42c365ef1b1c0ff13c90",
+    "mesa-original-apply.log": "82951fef691582f6f90d44f906721789155b0f9a89cdf21cc077f18d1091f344",
+    "mesa-setup.log": "23898377a5772873458d5c4c65e1284deeff84fccff288113a8b52689e2ae458",
+    "mesa-stage.log": "059df10b9ce348d147e5036e375b8219ae9a27db53a6b9ea285b55e5b156b2bc",
+    "shellcheck.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "upstream-kernel-original-apply.log": "0cf15c5e8f4f83534c15519c6ade65327992f427308ae4fc4671d3f72ed34f20"
+  },
+  "resources": {
+    "waited_for_existing_benchmark_terminal_result_before_compiling": true,
+    "build_jobs": 1,
+    "nice": 19,
+    "reused_existing_private_build_tools": true
+  },
+  "boundaries": {
+    "environment": "isolated dot Arch VM workspace",
+    "system_package_installations": false,
+    "kernel_or_driver_installed": false,
+    "rebooted": false,
+    "full_arch_makepkg": false,
+    "full_kernel_link": false,
+    "dkms_initramfs_bootloader": false,
+    "native_gpu_execution": false,
+    "ff7_runtime_test": false,
+    "new_performance_or_stability_claim": false,
+    "github_publication": false
+  }
+}

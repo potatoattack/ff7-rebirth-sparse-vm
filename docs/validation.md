@@ -1,4 +1,39 @@
-# Candidate validation — 25 October 2026
+# Candidate validation — 2 November 2026
+
+Source-package candidate **0.1.0-rc5** uses CachyOS `cachyos-7.3.1-1`
+(Linux 7.3.1), packaged as `7.3.1-1-cachyos-sparse-vm`, and Mesa **26.2.6**.
+These are the latest stable release bases checked on this date; Linux 7.4-rc1
+and Mesa 26.3 release candidates are excluded. The private protocol remains v1.
+
+| Check | rc5 result / boundary |
+| --- | --- |
+| Source integrity | Mesa SHA-256 matches its official release notes, CachyOS SHA-256 matches its GitHub release asset digest and BLAKE2 matches its packaging recipe, and Linux SHA-256 matches kernel.org's checksum list. |
+| Patch application | All nine kernel and four Mesa patches apply with `--batch --forward --fuzz=0` to the exact release sources. The kernel series also applies to pristine upstream Linux 7.3.1. |
+| Upstream audit | Existing patched files are unchanged from the previous source bases. All 13 patches remain necessary; diff bodies, private protocol and accepted behavior are unchanged. Only kernel patch 1's base-version subject changes. |
+| Host regressions | Batching, fallback, synchronization, ordering, ownership, cleanup and opt-in checks pass on the newly patched sources. Four native-result validator tests pass. |
+| Kernel compilation | All 11 affected AMDGPU C translation units compile without warnings with GCC 16.2.1, x86-64 defconfig, AMDGPU module and HSA/SVM enabled. This is an object build, not a full kernel/module link or the recipe's Clang/LTO build. |
+| Kernel release / configuration | The generic config matches the pinned CachyOS reference. Its `olddefconfig` and release-string check pass with GCC; `kernelrelease` is `7.3.1-1-cachyos-sparse-vm`. |
+| RADV compilation | Complete release build and link with GCC 16.2.1, X11 + Wayland and ACO; LLVM disabled. Meson 1.12.1, Ninja 1.13.2, libdrm 2.4.134. One pre-existing GCC warning in unchanged ACO code, described below. |
+| RADV staging | The recipe's `package()` succeeds in a private staging directory. The ELF64 x86-64 driver, ICD, RADV defaults and license are present; shared Mesa defaults are excluded. The ICD points to `/usr/lib/libvulkan_radeon.so`; no RPATH/RUNPATH. |
+| Native programs | Both compile with `-Wall -Wextra -Werror` using the new Mesa release's Vulkan headers and pass CPU self-tests, including 72 neighbor layouts. No GPU execution. |
+| Tooling / recipes | Eight benchmark-tool tests, Bash syntax, ShellCheck Bash error checks, all 11 kernel and five Mesa recipe-input checksums, `makepkg --printsrcinfo` for both recipes, and `git diff --check` pass. |
+
+GCC reports `-Wmaybe-uninitialized` for `BlockCycleEstimator::block` in
+`src/amd/compiler/aco_statistics.cpp`. The same warning appears in the rc3 Mesa
+26.2.5 build log, and that source file is byte-identical in 26.2.6 and untouched
+by these patches. The build links successfully; this refresh does not change
+that upstream code.
+
+Builds used one low-priority job after the existing benchmark finished. Existing
+private build tools were reused; no system dependencies were installed.
+Commands, source pins, per-patch status, binary and log hashes, and packaging
+checks are recorded in [rc5 machine-readable evidence](validation-rc5.json).
+A full Arch `makepkg` build, boot, DKMS/initramfs, native GPU tests and game
+validation remain pending. No installation, reboot or hardware test was run,
+and no new performance or stability claim is made. The historical rc2 gameplay
+results do not validate this refresh. See [source provenance](provenance.md).
+
+## Historical rc4 validation — 25 October 2026
 
 Source-package candidate **0.1.0-rc4** uses CachyOS `cachyos-7.3.0-4`
 (Linux 7.3) and builds the separate kernel as `7.3.0-5-cachyos-sparse-vm`.

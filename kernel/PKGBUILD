@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: GPL-2.0-only
-# Based on CachyOS linux-cachyos 523baf9cc1e37b7f8079064447f1418702c45154.
+# Based on CachyOS linux-cachyos 343523fffa2cbfd37e37a04e793d641cbd0fe975.
 pkgbase=linux-cachyos-sparse-vm
 pkgname=(linux-cachyos-sparse-vm linux-cachyos-sparse-vm-headers)
-pkgver=7.3.0
-pkgrel=5
+pkgver=7.3.1
+pkgrel=1
 pkgdesc='CachyOS kernel with opt-in AMDGPU sparse VM improvements'
 arch=(x86_64)
 url='https://github.com/CachyOS/linux'
@@ -11,7 +11,7 @@ license=(GPL-2.0-only)
 makedepends=(bc bison flex binutils clang llvm lld cpio gettext libelf openssl
              pahole perl python rust rust-bindgen rust-src tar xxhash xz zlib zstd)
 options=(!strip !debug !lto)
-_srcname=cachyos-7.3.0-4
+_srcname=cachyos-7.3.1-1
 _patches=(
   0001-amdgpu-explicit-unmap-e01.patch
   0002-amdgpu-direct-replace-e03.patch
@@ -26,9 +26,9 @@ _patches=(
 source=("https://github.com/CachyOS/linux/releases/download/$_srcname/$_srcname.tar.gz"
         config "${_patches[@]}")
 b2sums=(
-  'd90b9a609d930cf596022050014ef75e11f3b9378fb51be7763743bc15b10d31caa8d48c59149ed2aea28853aae1ec6d7e68a8ce441b1bd014c9897cbeb8dba5'
+  'b744477e1202ae7c63020645fdd923625da6edd2bde61d01d9c7755e6d9628fc3fb00e615261f02a5c503d5c890cb9f8e1e9f068aea7ed01fda45b2d64e7216a'
   'e21485bd3d917be15837eb51ddb9aeb4a0df5fb7b18ccbf1d520aff2340833935e441f634e4ae8482a21ff38a9dec9f320bec3459aedf15087909b6eb2cff7db'
-  'a04149747e27dea14a0e9c6b600b947b6bb9ec4270e000b546fcbc0c7b15c238e814e38c379bdeac84f394274b287519aa6fbb4385e2a9732ed7849df68e06c0'
+  '774d80aefa0219256fdbf6b57d7b93c356473caf21e9fc177c4dfc96e92199b8333e2e37fa1247d7c1412003ca510effb1d2d6974d1b43a207b6f039f525b8c4'
   '714b20e7bb09a0aefc38401a8fe8dc3e22818cda90ebebfa3060d3e321b7095b50cbb49ee4f1ddf3a9495bd8e9c2c5aba6051c8503875c71ed3723fbc8de2e43'
   '022a82bc224afc4192eaa115addf3541a9b918f296732ee1847207e479fbfc86fb2dfaf104a09398d6d71ad9d72e217e13b32f6efd946da1f883a469a0253c48'
   'f9a90ad61bef93f96f6573f1cef7c433e697e9d61b07167c88f3f72a9b5812da1a18a6e03d4f9869d4487f8992b1ebd1685c5ebb88ec88e8b82833d4060b1cf4'
