@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 pkgname=vulkan-radeon-sparse-vm
-pkgver=26.2.5
+pkgver=26.2.6
 epoch=3
 pkgrel=1
 pkgdesc='RADV with per-game opt-in AMDGPU sparse VM improvements'
@@ -24,7 +24,7 @@ _patches=(
 source=("https://archive.mesa3d.org/mesa-$pkgver.tar.xz"
         "${_patches[@]}")
 sha256sums=(
-  '794b3d1729075dae7ebd47c7283b7ca0cdb5dec668f7f11cc0a5d82f6138a0a5'
+  'b9436b3e1a8be76fbd4823dc884f90596ab7c6ac5e1867a305e66ffccfb31a92'
   '690321d538160eed4ae28fbc34b99697741e907834d8f236fe8e1d36e9a99fa7'
   '047946d2cc7bf067bae575ccc51988ad3e40843f6d3c62b8b9c421556e748e0d'
   '07f6aab2fc30e04cfa7320c0b42cd0f3fc46e85e41b6be0eb9b8a80c70749e80'

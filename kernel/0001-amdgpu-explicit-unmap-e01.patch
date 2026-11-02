@@ -1,4 +1,4 @@
-Subject: [EXPERIMENT E01] amdgpu explicit sparse unmaps on CachyOS 7.3.0-3
+Subject: [EXPERIMENT E01] amdgpu explicit sparse unmaps on CachyOS 7.3.1-1
 
 Based on Natalie Vock's 2026-05-29 "Explicit sync for PRT unmaps" series,
 patches 1 and 2. Rebased onto the checksum-pinned CachyOS release.

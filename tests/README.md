@@ -60,8 +60,8 @@ oracles remain readable.
 After `makepkg -o` has prepared both source trees:
 
 ```sh
-bash tests/run-host.sh kernel/src/cachyos-7.3.0-3 \
-  mesa/src/mesa-26.2.5
+bash tests/run-host.sh kernel/src/cachyos-7.3.1-1 \
+  mesa/src/mesa-26.2.6
 ```
 
 These compile the actual new activation functions against controlled ioctl and
